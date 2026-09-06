@@ -1,0 +1,48 @@
+{
+  "project_info": {
+    "project_number": "879462826964",
+    "project_id": "finzen-53ab0",
+    "storage_bucket": "finzen-53ab0.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:879462826964:android:086537824ff16b37724c41",
+        "android_client_info": {
+          "package_name": "com.example.finzen"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyD-Uqw8X0UVpNUzKNU_9S6-84kjf2wr6aQ"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:879462826964:android:2837febbcb79035c724c41",
+        "android_client_info": {
+          "package_name": "com.example.geochat"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyD-Uqw8X0UVpNUzKNU_9S6-84kjf2wr6aQ"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
