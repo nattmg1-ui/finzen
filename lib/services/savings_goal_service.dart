@@ -15,9 +15,6 @@ class SavingsGoalService {
   CollectionReference<Map<String, dynamic>> get _goalsRef =>
       _db.collection('users').doc(_requireUid).collection('goals');
 
-  /// Historial de aportes (Cubo C), plano y separado de cada meta,
-  /// para poder consultarlo fácilmente por ciclo sin necesitar
-  /// consultas entre subcolecciones (collectionGroup).
   CollectionReference<Map<String, dynamic>> get _contributionsRef =>
       _db.collection('users').doc(_requireUid).collection('goalContributions');
 
@@ -32,6 +29,7 @@ class SavingsGoalService {
     required String name,
     required int targetAmount,
     required String priority,
+    required String type,
     required DateTime deadline,
   }) {
     return _goalsRef.add({
@@ -39,8 +37,11 @@ class SavingsGoalService {
       'targetAmount': targetAmount,
       'currentAmount': 0,
       'priority': priority,
+      'type': type,
       'deadline': Timestamp.fromDate(deadline),
       'completed': false,
+      'paused': false,
+      'pausedAt': null,
       'createdAt': FieldValue.serverTimestamp(),
     });
   }
@@ -50,19 +51,28 @@ class SavingsGoalService {
     required String name,
     required int targetAmount,
     required String priority,
+    required String type,
     required DateTime deadline,
   }) {
     return _goalsRef.doc(goalId).update({
       'name': name,
       'targetAmount': targetAmount,
       'priority': priority,
+      'type': type,
       'deadline': Timestamp.fromDate(deadline),
     });
   }
 
-  /// El usuario "aporta" dinero a una meta. Además de sumar al total
-  /// acumulado, ahora también deja un registro histórico con fecha
-  /// (necesario para el Cubo C del Módulo 8).
+  /// Pausa o reactiva una meta. Al pausar, guarda CUÁNDO se pausó
+  /// (para poder reactivar en orden inverso más adelante). Al
+  /// reactivar, borra esa marca de tiempo.
+  Future<void> setPaused(String goalId, {required bool paused}) {
+    return _goalsRef.doc(goalId).update({
+      'paused': paused,
+      'pausedAt': paused ? FieldValue.serverTimestamp() : null,
+    });
+  }
+
   Future<void> addFunds({
     required String goalId,
     required int currentAmount,
@@ -81,12 +91,6 @@ class SavingsGoalService {
     });
   }
 
-  Stream<List<Map<String, dynamic>>> _rawContributions() {
-    return _contributionsRef.snapshots().map((s) => s.docs.map((d) => d.data()).toList());
-  }
-
-  /// Expuesto para que GoalContributionService pueda leer el
-  /// historial sin duplicar la referencia a la colección.
   CollectionReference<Map<String, dynamic>> get contributionsRef => _contributionsRef;
 
   Future<void> deleteGoal(String goalId) {

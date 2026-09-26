@@ -5,23 +5,23 @@ class CycleService {
   final IncomeService _incomeService = IncomeService();
 
   Future<String?> governingFrequency() async {
-    final incomes = await _incomeService.watchIncomes().first;
+    final incomes = await _incomeService.fetchIncomesOnce();
     if (incomes.isEmpty) return null;
     final main = incomes.reduce((a, b) => a.amount >= b.amount ? a : b);
     return main.frequency;
   }
 
-  /// Fecha ancla: la fecha (elegida por el usuario) de su fuente de
-  /// ingreso principal.
+  /// Fecha ancla: la fecha (elegida por el usuario) MÁS ANTIGUA entre
+  /// todos sus ingresos.
   Future<DateTime?> anchorDate() async {
-    final incomes = await _incomeService.watchIncomes().first;
+    final incomes = await _incomeService.fetchIncomesOnce();
     if (incomes.isEmpty) return null;
     return incomes.map((i) => i.date).reduce((a, b) => a.isBefore(b) ? a : b);
   }
 
   /// Suma de los ingresos cuya fecha ya pasó antes de `cutoff`.
   Future<int> totalIncomeAsOf(DateTime cutoff) async {
-    final incomes = await _incomeService.watchIncomes().first;
+    final incomes = await _incomeService.fetchIncomesOnce();
     return incomes.where((i) => i.date.isBefore(cutoff)).fold<int>(0, (sum, i) => sum + i.amount);
   }
 

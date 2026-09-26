@@ -22,6 +22,11 @@ class IncomeService {
         .map((snapshot) => snapshot.docs.map(IncomeModel.fromDoc).toList());
   }
 
+  Future<List<IncomeModel>> fetchIncomesOnce() async {
+    final snapshot = await _incomesRef.orderBy('createdAt', descending: true).get(const GetOptions(source: Source.server));
+    return snapshot.docs.map(IncomeModel.fromDoc).toList();
+  }
+
   Future<void> addIncome({
     required String type,
     required String frequency,

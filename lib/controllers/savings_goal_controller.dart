@@ -10,25 +10,26 @@ class SavingsGoalController extends ChangeNotifier {
   final ExpenseService _expenseService = ExpenseService();
 
   static const List<String> priorities = ['Alta', 'Media', 'Baja'];
+  static const List<String> types = ['Vital', 'Opcional'];
   static const String pausedMessage = 'Pausada: tus gastos básicos están en riesgo';
   static const int maxYearsAhead = 4;
 
   List<SavingsGoalModel> goals = [];
   bool isLoading = true;
   String? errorMessage;
-
-  Set<String> pausedGoalIds = {};
   String? adjustmentMessage;
 
   int _totalIncome = 0;
   int _totalVitalExpenses = 0;
+  bool _isEvaluating = false;
 
   SavingsGoalController() {
     _service.watchGoals().listen(
       (data) {
         goals = data;
         isLoading = false;
-        _recomputePaused();
+        notifyListeners();
+        _evaluatePauseReactivation();
       },
       onError: (_) {
         errorMessage = 'No se pudieron cargar tus metas.';
@@ -39,59 +40,99 @@ class SavingsGoalController extends ChangeNotifier {
 
     _incomeService.watchIncomes().listen((incomes) {
       _totalIncome = incomes.fold(0, (sum, i) => sum + i.amount);
-      _recomputePaused();
+      _evaluatePauseReactivation();
     });
 
     _expenseService.watchExpenses().listen((expenses) {
       _totalVitalExpenses = expenses.where((e) => e.essentialType == 'Vital').fold(0, (sum, e) => sum + e.amount);
-      _recomputePaused();
+      _evaluatePauseReactivation();
     });
-  }
-
-  int _priorityRank(String priority) {
-    switch (priority) {
-      case 'Alta':
-        return 0;
-      case 'Media':
-        return 1;
-      default:
-        return 2;
-    }
   }
 
   int _monthsBetween(DateTime from, DateTime to) {
     return (to.year - from.year) * 12 + (to.month - from.month);
   }
 
-  void _recomputePaused() {
-    double remainingCapacity = (_totalIncome - _totalVitalExpenses).toDouble();
-    if (remainingCapacity < 0) remainingCapacity = 0;
-
-    final activeGoalsSorted = goals.where((g) => !g.completed).toList()
-      ..sort((a, b) => _priorityRank(a.priority).compareTo(_priorityRank(b.priority)));
-
-    final today = DateTime.now();
-    final newPaused = <String>{};
-
-    for (final goal in activeGoalsSorted) {
-      final remainingTarget = goal.targetAmount - goal.currentAmount;
-      if (remainingTarget <= 0) continue;
-
-      final monthsRemaining = _monthsBetween(today, goal.deadline).clamp(1, 999);
-      final requiredQuota = remainingTarget / monthsRemaining;
-
-      if (requiredQuota <= remainingCapacity) {
-        remainingCapacity -= requiredQuota;
-      } else {
-        newPaused.add(goal.id);
-      }
-    }
-
-    pausedGoalIds = newPaused;
-    notifyListeners();
+  double _quotaFor(SavingsGoalModel g) {
+    final remaining = g.targetAmount - g.currentAmount;
+    if (remaining <= 0) return 0;
+    final months = _monthsBetween(DateTime.now(), g.deadline).clamp(1, 999);
+    return remaining / months;
   }
 
-  bool isPaused(String goalId) => pausedGoalIds.contains(goalId);
+  /// Orden de pausado: ascendente de prioridad (Baja primero, luego
+  /// Media, luego Alta — pausamos lo menos importante primero). En
+  /// caso de empate, la de fecha límite MÁS LEJANA se pausa primero.
+  int _pauseOrderComparator(SavingsGoalModel a, SavingsGoalModel b) {
+    const rank = {'Baja': 0, 'Media': 1, 'Alta': 2};
+    final rankA = rank[a.priority] ?? 0;
+    final rankB = rank[b.priority] ?? 0;
+    if (rankA != rankB) return rankA.compareTo(rankB);
+    return b.deadline.compareTo(a.deadline);
+  }
+
+  /// El "motor" de pausado/reactivación. Se ejecuta cada vez que
+  /// cambian los ingresos, gastos, o las metas mismas.
+  ///
+  /// Pausar: primero agota las metas Opcionales activas (una por una,
+  /// en orden ascendente de prioridad, empate = fecha más lejana). Si
+  /// ya no quedan Opcionales activas que pausar y la cuota restante
+  /// sigue en riesgo, empieza a pausar Vitales con el mismo orden.
+  ///
+  /// Reactivar: en orden INVERSO al que se pausaron (la más reciente
+  /// en pausarse se reactiva primero), solo si el ingreso alcanza
+  /// para cubrir gastos básicos + esa cuota + las ya activas.
+  Future<void> _evaluatePauseReactivation() async {
+    if (_isEvaluating) return;
+    _isEvaluating = true;
+    try {
+      double capacity = (_totalIncome - _totalVitalExpenses).toDouble();
+      if (capacity < 0) capacity = 0;
+
+      final relevantGoals = goals.where((g) => !g.completed).toList();
+      final activeGoals = relevantGoals.where((g) => !g.paused).toList();
+      final pausedGoalsNewestFirst = relevantGoals.where((g) => g.paused).toList()
+        ..sort((a, b) => (b.pausedAt ?? DateTime(0)).compareTo(a.pausedAt ?? DateTime(0)));
+
+      final neededForActive = activeGoals.fold<double>(0, (sum, g) => sum + _quotaFor(g));
+
+      if (neededForActive > capacity) {
+        // Hay que pausar: Opcionales activas primero, luego Vitales.
+        final opcionalCandidates = activeGoals.where((g) => g.type == 'Opcional').toList()..sort(_pauseOrderComparator);
+        final vitalCandidates = activeGoals.where((g) => g.type == 'Vital').toList()..sort(_pauseOrderComparator);
+
+        var stillNeeded = neededForActive;
+        for (final candidate in [...opcionalCandidates, ...vitalCandidates]) {
+          if (stillNeeded <= capacity) break;
+          stillNeeded -= _quotaFor(candidate);
+          await _service.setPaused(candidate.id, paused: true);
+        }
+      } else if (pausedGoalsNewestFirst.isNotEmpty) {
+        // Hay margen: intenta reactivar empezando por la más reciente
+        // en haberse pausado.
+        var freeCapacity = capacity - neededForActive;
+        for (final g in pausedGoalsNewestFirst) {
+          final quota = _quotaFor(g);
+          if (quota <= freeCapacity) {
+            await _service.setPaused(g.id, paused: false);
+            freeCapacity -= quota;
+          } else {
+            break; // mantiene el orden: si esta no cabe, no probamos las siguientes
+          }
+        }
+      }
+    } finally {
+      _isEvaluating = false;
+    }
+  }
+
+  bool isPaused(String goalId) {
+    try {
+      return goals.firstWhere((g) => g.id == goalId).paused;
+    } catch (_) {
+      return false;
+    }
+  }
 
   List<SavingsGoalModel> activeGoalsExcept(String excludeId) {
     return goals.where((g) => !g.completed && g.id != excludeId).toList();
@@ -102,11 +143,6 @@ class SavingsGoalController extends ChangeNotifier {
     return DateTime(today.year + maxYearsAhead, today.month, today.day);
   }
 
-  /// Calcula la fecha límite final a usar. Devuelve null cuando la
-  /// meta NO es viable dentro del horizonte máximo de 4 años (ni con
-  /// la fecha pedida, ni con la fecha mínima que haría la cuota
-  /// mensual viable según el 20% del ingreso) — en ese caso la meta
-  /// se rechaza por completo, no se guarda con una fecha fuera de rango.
   Future<DateTime?> _resolveViableDeadline({
     required int targetAmount,
     required int currentAmount,
@@ -118,8 +154,6 @@ class SavingsGoalController extends ChangeNotifier {
     final incomeList = await _incomeService.watchIncomes().first;
     final totalIncome = incomeList.fold<int>(0, (sum, i) => sum + i.amount);
 
-    // Sin ingreso registrado o meta ya cubierta: solo importa el
-    // horizonte máximo de años.
     if (totalIncome <= 0 || remaining <= 0) {
       if (requestedDeadline.isAfter(maxDeadline)) return null;
       return requestedDeadline;
@@ -136,8 +170,6 @@ class SavingsGoalController extends ChangeNotifier {
     final requestedQuota = remaining / requestedMonths;
 
     if (requestedQuota <= maxMonthlyQuota) {
-      // La fecha pedida ya es viable en cuota, pero igual debe
-      // respetar el máximo de años.
       if (requestedDeadline.isAfter(maxDeadline)) return null;
       return requestedDeadline;
     }
@@ -146,8 +178,6 @@ class SavingsGoalController extends ChangeNotifier {
     final adjustedDeadline = DateTime(today.year, today.month + minMonthsNeeded, today.day);
 
     if (adjustedDeadline.isAfter(maxDeadline)) {
-      // Ni siquiera la fecha mínima viable cabe en 4 años: la meta
-      // no es viable, punto — no se guarda con una fecha fuera de rango.
       return null;
     }
 
@@ -162,6 +192,7 @@ class SavingsGoalController extends ChangeNotifier {
     required String name,
     required String targetAmountText,
     required String priority,
+    required String type,
     required DateTime deadline,
   }) async {
     if (name.trim().isEmpty) {
@@ -177,6 +208,11 @@ class SavingsGoalController extends ChangeNotifier {
     }
     if (!priorities.contains(priority)) {
       errorMessage = 'Selecciona una prioridad válida';
+      notifyListeners();
+      return false;
+    }
+    if (!types.contains(type)) {
+      errorMessage = 'Selecciona un tipo válido (Vital u Opcional)';
       notifyListeners();
       return false;
     }
@@ -204,7 +240,7 @@ class SavingsGoalController extends ChangeNotifier {
         return false;
       }
 
-      await _service.addGoal(name: name.trim(), targetAmount: targetAmount, priority: priority, deadline: finalDeadline);
+      await _service.addGoal(name: name.trim(), targetAmount: targetAmount, priority: priority, type: type, deadline: finalDeadline);
       errorMessage = null;
       notifyListeners();
       return true;
@@ -221,6 +257,7 @@ class SavingsGoalController extends ChangeNotifier {
     required String targetAmountText,
     required int currentAmount,
     required String priority,
+    required String type,
     required DateTime deadline,
   }) async {
     if (name.trim().isEmpty) {
@@ -236,6 +273,11 @@ class SavingsGoalController extends ChangeNotifier {
     }
     if (!priorities.contains(priority)) {
       errorMessage = 'Selecciona una prioridad válida';
+      notifyListeners();
+      return false;
+    }
+    if (!types.contains(type)) {
+      errorMessage = 'Selecciona un tipo válido (Vital u Opcional)';
       notifyListeners();
       return false;
     }
@@ -263,7 +305,14 @@ class SavingsGoalController extends ChangeNotifier {
         return false;
       }
 
-      await _service.updateGoal(goalId: goalId, name: name.trim(), targetAmount: targetAmount, priority: priority, deadline: finalDeadline);
+      await _service.updateGoal(
+        goalId: goalId,
+        name: name.trim(),
+        targetAmount: targetAmount,
+        priority: priority,
+        type: type,
+        deadline: finalDeadline,
+      );
       errorMessage = null;
       notifyListeners();
       return true;
@@ -301,6 +350,7 @@ class SavingsGoalController extends ChangeNotifier {
         name: goal.name,
         targetAmount: goal.targetAmount,
         priority: goal.priority,
+        type: goal.type,
         deadline: suggested,
       );
       adjustmentMessage = 'Se actualizó la fecha límite al ${suggested.day}/${suggested.month}/${suggested.year} '
@@ -314,9 +364,10 @@ class SavingsGoalController extends ChangeNotifier {
     }
   }
 
+  /// RQNF: no se permiten aportaciones manuales mientras la meta esté pausada.
   Future<({bool success, bool justCompleted})> addFunds(SavingsGoalModel goal, String amountText) async {
-    if (isPaused(goal.id)) {
-      errorMessage = 'Esta meta está pausada porque tus gastos básicos están en riesgo. No puedes aportar mientras tanto.';
+    if (goal.paused) {
+      errorMessage = 'Esta meta está pausada. No puedes aportar mientras tanto.';
       notifyListeners();
       return (success: false, justCompleted: false);
     }

@@ -45,6 +45,7 @@ class _SavingsGoalViewState extends State<SavingsGoalView> {
     final nameController = TextEditingController(text: existingGoal?.name ?? '');
     final amountController = TextEditingController(text: existingGoal?.targetAmount.toString() ?? '');
     String selectedPriority = existingGoal?.priority ?? 'Media';
+    String selectedType = existingGoal?.type ?? 'Opcional';
     DateTime selectedDeadline = existingGoal?.deadline ?? DateTime.now().add(const Duration(days: 90));
     final maxDeadline = _controller.maxAllowedDeadline();
 
@@ -105,6 +106,28 @@ class _SavingsGoalViewState extends State<SavingsGoalView> {
                     ),
                     const SizedBox(height: 20),
 
+                    const Text('Tipo de meta', style: TextStyle(fontWeight: FontWeight.w500)),
+                    const SizedBox(height: 4),
+                    const Text(
+                      'Vital: fondos de emergencia, deudas urgentes. Opcional: viajes, compras, deseos.',
+                      style: TextStyle(fontSize: 12, color: Colors.grey),
+                    ),
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 8,
+                      children: SavingsGoalController.types.map((t) {
+                        final isSelected = selectedType == t;
+                        return ChoiceChip(
+                          label: Text(t),
+                          selected: isSelected,
+                          onSelected: (_) => setSheetState(() => selectedType = t),
+                          selectedColor: const Color(0xFFE89A3C),
+                          labelStyle: TextStyle(color: isSelected ? Colors.white : null, fontWeight: FontWeight.bold),
+                        );
+                      }).toList(),
+                    ),
+                    const SizedBox(height: 20),
+
                     const Text('Fecha límite', style: TextStyle(fontWeight: FontWeight.w500)),
                     const SizedBox(height: 8),
                     OutlinedButton(
@@ -142,12 +165,14 @@ class _SavingsGoalViewState extends State<SavingsGoalView> {
                                   targetAmountText: amountController.text,
                                   currentAmount: existingGoal.currentAmount,
                                   priority: selectedPriority,
+                                  type: selectedType,
                                   deadline: selectedDeadline,
                                 )
                               : await _controller.addGoal(
                                   name: nameController.text,
                                   targetAmountText: amountController.text,
                                   priority: selectedPriority,
+                                  type: selectedType,
                                   deadline: selectedDeadline,
                                 );
 
@@ -405,13 +430,29 @@ class _SavingsGoalViewState extends State<SavingsGoalView> {
                                             style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: cardTextColor),
                                           ),
                                         ),
-                                        Container(
-                                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                                          decoration: BoxDecoration(color: pillColors['bg'], borderRadius: BorderRadius.circular(20)),
-                                          child: Text(
-                                            goal.priority,
-                                            style: TextStyle(color: pillColors['text'], fontSize: 12, fontWeight: FontWeight.bold),
-                                          ),
+                                        Row(
+                                          children: [
+                                            Container(
+                                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                              margin: const EdgeInsets.only(right: 6),
+                                              decoration: BoxDecoration(
+                                                color: cardTextColor.withOpacity(0.08),
+                                                borderRadius: BorderRadius.circular(20),
+                                              ),
+                                              child: Text(
+                                                goal.type,
+                                                style: TextStyle(color: cardTextColor.withOpacity(0.7), fontSize: 11, fontWeight: FontWeight.w600),
+                                              ),
+                                            ),
+                                            Container(
+                                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                                              decoration: BoxDecoration(color: pillColors['bg'], borderRadius: BorderRadius.circular(20)),
+                                              child: Text(
+                                                goal.priority,
+                                                style: TextStyle(color: pillColors['text'], fontSize: 12, fontWeight: FontWeight.bold),
+                                              ),
+                                            ),
+                                          ],
                                         ),
                                       ],
                                     ),
@@ -427,7 +468,6 @@ class _SavingsGoalViewState extends State<SavingsGoalView> {
                                     Row(
                                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                                       children: [
-                                        const Text('', style: TextStyle(fontSize: 0)),
                                         Text('\$${goal.currentAmount} de \$${goal.targetAmount}', style: const TextStyle(fontSize: 13, color: cardTextColor)),
                                         Row(
                                           children: [
@@ -446,7 +486,7 @@ class _SavingsGoalViewState extends State<SavingsGoalView> {
                                     const SizedBox(height: 4),
                                     if (goal.completed)
                                       const Text('¡Meta completada! 🎉', style: TextStyle(color: Colors.green, fontWeight: FontWeight.bold))
-                                    else if (_controller.isPaused(goal.id))
+                                    else if (goal.paused)
                                       Container(
                                         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                                         decoration: BoxDecoration(color: Colors.white.withOpacity(isDark ? 0.15 : 0.7), borderRadius: BorderRadius.circular(20)),
