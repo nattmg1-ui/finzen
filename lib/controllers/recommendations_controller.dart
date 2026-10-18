@@ -38,9 +38,11 @@ class RecommendationsController extends ChangeNotifier {
   FinancialModeResult? financialMode;
   ReferenceIncome? referenceIncome;
 
-  /// Módulo 1: recomendación general de los primeros 14 días.
-  OnboardingRecommendation? onboarding;
-  int? onboardingDay;
+  /// Módulo 1: recomendaciones generales de los primeros 14 días.
+  List<OnboardingRecommendation> onboardingCatalog = []; // todas, en orden
+  List<OnboardingRecommendation> onboardingToday = []; // las de hoy
+  bool onboardingAllSeen = false; // ya vio todas (antes de hoy)
+  int? onboardingDay; // 1..14; null fuera del periodo
 
   /// Módulo 9: lección y reto en texto plano cuando el gasto en Deseos
   /// supera el 30% del gasto total del ciclo.
@@ -59,26 +61,68 @@ class RecommendationsController extends ChangeNotifier {
     return projection > income;
   }
 
+  String _dateKey(DateTime d) =>
+      '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+
   Future<void> _loadOnboarding() async {
-    onboarding = null;
+    onboardingCatalog = [];
+    onboardingToday = [];
+    onboardingAllSeen = false;
     onboardingDay = null;
 
     final user = await _firestoreService.fetchCurrentUserProfile();
     final createdAt = user?.createdAt;
-    if (createdAt == null) return;
+    if (user == null || createdAt == null) return;
 
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
     final signupDay = DateTime(createdAt.year, createdAt.month, createdAt.day);
     final daysSinceSignup = today.difference(signupDay).inDays;
 
+    // RQNF: solo durante los primeros 14 días.
     if (daysSinceSignup < 0 || daysSinceSignup >= onboardingDays) return;
 
-    onboarding = buildOnboardingRecommendation(
-      financialGoal: user?.diagnosis?['financialGoal'] as String?,
-      savingHabit: user?.diagnosis?['savingHabit'] as String?,
+    final catalog = buildOnboardingCatalog(
+      financialGoal: user.diagnosis?['financialGoal'] as String?,
+      savingHabit: user.diagnosis?['savingHabit'] as String?,
     );
-    if (onboarding != null) onboardingDay = daysSinceSignup + 1;
+    if (catalog.isEmpty) return;
+
+    onboardingCatalog = catalog;
+    onboardingDay = daysSinceSignup + 1;
+
+    final todayKey = _dateKey(today);
+    List<String> todayIds;
+
+    if (user.onboardingLastDate == todayKey) {
+      // Mismo día: se muestran las mismas que ya se asignaron hoy.
+      todayIds = user.onboardingTodayIds;
+    } else {
+      // RQNF: siguientes del catálogo que aún no se han mostrado. Si quedan
+      // más pendientes que días, se muestran las necesarias hoy.
+      final shown = user.onboardingShownIds.toList();
+      final pending = catalog.where((r) => !shown.contains(r.id)).toList();
+      final count = onboardingCountForToday(
+        pending: pending.length,
+        daysLeft: onboardingDays - daysSinceSignup,
+      );
+      todayIds = pending.take(count).map((r) => r.id).toList();
+
+      if (todayIds.isNotEmpty) {
+        try {
+          await _firestoreService.saveOnboardingProgress(
+            shownIds: [...shown, ...todayIds],
+            todayIds: todayIds,
+            date: todayKey,
+          );
+        } catch (_) {
+          // Si no se pudo guardar, se muestran igual; mañana se reintenta.
+        }
+      }
+    }
+
+    onboardingToday = catalog.where((r) => todayIds.contains(r.id)).toList();
+    onboardingAllSeen = onboardingToday.isEmpty;
   }
 
   Future<void> _load() async {

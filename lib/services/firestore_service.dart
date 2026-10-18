@@ -49,6 +49,20 @@ class FirestoreService {
     });
   }
 
+  /// Módulo 1: guarda qué recomendaciones de los primeros 14 días ya se
+  /// mostraron, cuáles tocan hoy y la fecha en que se asignaron.
+  Future<void> saveOnboardingProgress({
+    required List<String> shownIds,
+    required List<String> todayIds,
+    required String date,
+  }) {
+    return _usersRef.doc(_requireUid).update({
+      'onboardingShownIds': shownIds,
+      'onboardingTodayIds': todayIds,
+      'onboardingLastDate': date,
+    });
+  }
+
   Future<AppUser?> fetchCurrentUserProfile() async {
     final uid = _authService.currentUser?.uid;
     if (uid == null) return null;

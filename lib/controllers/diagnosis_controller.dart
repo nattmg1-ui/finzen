@@ -12,6 +12,9 @@ class DiagnosisController extends ChangeNotifier {
 
   static const int maxIncomeSourceSelections = 2;
 
+  /// RQNF: ingreso y gastos básicos enteros con un mínimo de 500.
+  static const int minAmount = 500;
+
   final TextEditingController monthlyIncomeController = TextEditingController();
   final TextEditingController monthlyExpensesController = TextEditingController();
 
@@ -90,7 +93,7 @@ class DiagnosisController extends ChangeNotifier {
         final controller = key == 'monthlyIncome' ? monthlyIncomeController : monthlyExpensesController;
         final text = controller.text.trim();
         final value = int.tryParse(text);
-        if (value == null || value < 0) return false;
+        if (value == null || value < minAmount) return false;
         answers[key] = value;
         return true;
 

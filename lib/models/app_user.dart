@@ -13,6 +13,11 @@ class AppUser {
   final bool notifyExpenseAlerts;
   final bool notifyGoalAlerts;
 
+  // Módulo 1: recomendaciones de los primeros 14 días.
+  final List<String> onboardingShownIds;
+  final String? onboardingLastDate; // 'YYYY-MM-DD'
+  final List<String> onboardingTodayIds;
+
   AppUser({
     required this.uid,
     required this.name,
@@ -23,6 +28,9 @@ class AppUser {
     this.themeMode = 'light',
     this.notifyExpenseAlerts = true,
     this.notifyGoalAlerts = true,
+    this.onboardingShownIds = const [],
+    this.onboardingLastDate,
+    this.onboardingTodayIds = const [],
   });
 
   factory AppUser.fromMap(String uid, Map<String, dynamic> data) {
@@ -36,6 +44,9 @@ class AppUser {
       themeMode: data['themeMode'] as String? ?? 'light',
       notifyExpenseAlerts: data['notifyExpenseAlerts'] as bool? ?? true,
       notifyGoalAlerts: data['notifyGoalAlerts'] as bool? ?? true,
+      onboardingShownIds: (data['onboardingShownIds'] as List?)?.map((e) => e.toString()).toList() ?? const [],
+      onboardingLastDate: data['onboardingLastDate'] as String?,
+      onboardingTodayIds: (data['onboardingTodayIds'] as List?)?.map((e) => e.toString()).toList() ?? const [],
     );
   }
 

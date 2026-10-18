@@ -70,7 +70,7 @@ const List<LessonModel> allLessons = [
         'una oferta".\n\n'
         'Una meta común es acumular entre 3 y 6 meses de tus gastos básicos, pero llegar directo a '
         'esa cifra puede sentirse imposible si estás empezando. Es más realista fijar una primera '
-        'meta pequeña (por ejemplo, un mes de gastos básicos) y after eso, seguir creciendo el fondo '
+        'meta pequeña (por ejemplo, un mes de gastos básicos) y después de eso, seguir creciendo el fondo '
         'poco a poco.\n\n'
         'Guardarlo en una cuenta separada de tu dinero del día a día ayuda a que no se mezcle con tus '
         'gastos normales ni se gaste "sin querer". Lo importante es que sea fácil de retirar cuando '

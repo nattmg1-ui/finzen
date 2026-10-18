@@ -148,7 +148,7 @@ class _IncomeViewState extends State<IncomeView> {
                       keyboardType: TextInputType.number,
                       decoration: InputDecoration(
                         prefixText: '\$ ',
-                        hintText: '0',
+                        hintText: '${IncomeController.minAmount}',
                         border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
                       ),
                     ),

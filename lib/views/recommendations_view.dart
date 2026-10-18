@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../controllers/recommendations_controller.dart';
 import '../data/onboarding_recommendations.dart';
+import '../models/lesson_model.dart';
 import '../services/reference_income_service.dart';
 import '../services/tcm_service.dart';
 import 'lesson_detail_view.dart';
@@ -51,25 +52,43 @@ class _RecommendationsViewState extends State<RecommendationsView> {
 
   /// Módulo 1: recomendaciones generales de los primeros 14 días.
   Widget? _buildOnboarding() {
-    final onboarding = _controller.onboarding;
     final day = _controller.onboardingDay;
-    if (onboarding == null || day == null) return null;
+    if (day == null) return null;
 
+    void openLesson(LessonModel lesson) =>
+        Navigator.push(context, MaterialPageRoute(builder: (context) => LessonDetailView(lesson: lesson)));
+
+    // Ya vio todas: aviso + lista completa para releer.
+    if (_controller.onboardingAllSeen) {
+      return _sectionCard(
+        title: 'Recomendaciones para empezar (día $day de $onboardingDays)',
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Ya revisaste todas tus recomendaciones para empezar. Puedes volver a leerlas aquí.',
+              style: TextStyle(fontSize: 13),
+            ),
+            const SizedBox(height: 8),
+            ..._controller.onboardingCatalog.map((r) => _lessonLink(r.lesson.title, () => openLesson(r.lesson))),
+          ],
+        ),
+      );
+    }
+
+    // Recomendación (o recomendaciones) de hoy.
+    final today = _controller.onboardingToday;
     return _sectionCard(
-      title: 'Recomendaciones para empezar (día $day de $onboardingDays)',
+      title: 'Recomendación de hoy (día $day de $onboardingDays)',
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(onboarding.message, style: const TextStyle(fontSize: 13)),
-          const SizedBox(height: 12),
-          const Text('Lecciones para ti', style: TextStyle(fontWeight: FontWeight.w500, fontSize: 13)),
-          const SizedBox(height: 4),
-          ...onboarding.lessons.map(
-            (lesson) => _lessonLink(
-              lesson.title,
-              () => Navigator.push(context, MaterialPageRoute(builder: (context) => LessonDetailView(lesson: lesson))),
-            ),
-          ),
+          for (var i = 0; i < today.length; i++) ...[
+            if (i > 0) const Divider(height: 24),
+            Text(today[i].message, style: const TextStyle(fontSize: 13)),
+            const SizedBox(height: 4),
+            _lessonLink(today[i].lesson.title, () => openLesson(today[i].lesson)),
+          ],
         ],
       ),
     );

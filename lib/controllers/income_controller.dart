@@ -7,6 +7,9 @@ class IncomeController extends ChangeNotifier {
 
   static const int lockAfterDays = 30;
 
+  /// RQNF: monto del ingreso entero con un mínimo de 100.
+  static const int minAmount = 100;
+
   List<IncomeModel> incomes = [];
   bool isLoading = true;
   String? errorMessage;
@@ -53,8 +56,8 @@ class IncomeController extends ChangeNotifier {
     required DateTime date,
   }) async {
     final amount = int.tryParse(amountText.trim());
-    if (amount == null || amount < 0) {
-      errorMessage = 'Ingresa un monto numérico válido (0 o mayor)';
+    if (amount == null || amount < minAmount) {
+      errorMessage = 'Ingresa un monto entero de al menos \$$minAmount MXN';
       notifyListeners();
       return false;
     }
@@ -90,8 +93,8 @@ class IncomeController extends ChangeNotifier {
     }
 
     final amount = int.tryParse(amountText.trim());
-    if (amount == null || amount < 0) {
-      errorMessage = 'Ingresa un monto numérico válido (0 o mayor)';
+    if (amount == null || amount < minAmount) {
+      errorMessage = 'Ingresa un monto entero de al menos \$$minAmount MXN';
       notifyListeners();
       return false;
     }

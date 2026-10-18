@@ -19,7 +19,7 @@ class _DiagnosisViewState extends State<DiagnosisView> {
       final type = question['type'] as DiagnosisQuestionType;
       String message = 'Por favor, selecciona una opción para continuar';
       if (type == DiagnosisQuestionType.numeric) {
-        message = 'Ingresa un monto numérico válido (0 o mayor)';
+        message = 'Ingresa un monto entero de al menos \$${DiagnosisController.minAmount} MXN';
       } else if (type == DiagnosisQuestionType.multiSelect) {
         message = 'Selecciona al menos una opción para continuar';
       }
@@ -175,7 +175,7 @@ class _DiagnosisViewState extends State<DiagnosisView> {
         decoration: InputDecoration(
           prefixText: '\$ ',
           prefixStyle: const TextStyle(fontSize: 32, fontWeight: FontWeight.bold, color: Colors.black),
-          hintText: '0',
+          hintText: '${DiagnosisController.minAmount}',
           suffixText: 'MXN',
           border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
         ),
