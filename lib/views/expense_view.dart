@@ -25,6 +25,28 @@ class _ExpenseViewState extends State<ExpenseView> {
     'Otros': Icons.category,
   };
 
+  /// Alerta preventiva: se muestra ANTES de guardar. Devuelve true si
+  /// el usuario decide registrar el gasto de todos modos.
+  Future<bool> _confirmHighExpense(BuildContext ctx, SubcategoryAlert alert) async {
+    final result = await showDialog<bool>(
+      context: ctx,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Gasto fuera de lo habitual'),
+        content: Text(
+          'Este gasto de \$${alert.amount} MXN en ${alert.subcategory} es '
+          '${alert.timesAverage.toStringAsFixed(1)} veces tu promedio por ciclo '
+          '(\$${alert.averagePerCycle.toStringAsFixed(0)} MXN). Está muy por encima de tu '
+          'comportamiento habitual en esta subcategoría.\n\n¿Quieres registrarlo de todos modos?',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(dialogContext, false), child: const Text('Revisar')),
+          TextButton(onPressed: () => Navigator.pop(dialogContext, true), child: const Text('Registrar de todos modos')),
+        ],
+      ),
+    );
+    return result ?? false;
+  }
+
   void _openExpenseSheet({ExpenseModel? existingExpense}) {
     final isEditing = existingExpense != null;
 
@@ -124,11 +146,12 @@ class _ExpenseViewState extends State<ExpenseView> {
                     const SizedBox(height: 8),
                     OutlinedButton(
                       onPressed: () async {
+                        final now = DateTime.now();
                         final picked = await showDatePicker(
                           context: sheetContext,
-                          initialDate: selectedDate,
-                          firstDate: DateTime(2020),
-                          lastDate: DateTime.now(),
+                          initialDate: selectedDate.isAfter(now) ? now : selectedDate,
+                          firstDate: now.subtract(const Duration(days: ExpenseController.lockAfterDays - 1)),
+                          lastDate: now,
                         );
                         if (picked != null) setSheetState(() => selectedDate = picked);
                       },
@@ -170,8 +193,32 @@ class _ExpenseViewState extends State<ExpenseView> {
                         ),
                         onPressed: () async {
                           if (selectedSubcategory == null) {
-                            showErrorDialog(sheetContext, 'Selecciona una subcategoría');
+                            showErrorDialog(sheetContext, 'Selecciona una subcategoría.');
                             return;
+                          }
+
+                          // Solo al registrar un gasto nuevo: validación y alerta preventiva.
+                          if (!isEditing) {
+                            final amount = _controller.validateInput(
+                              category: selectedCategory,
+                              subcategory: selectedSubcategory!,
+                              amountText: amountController.text,
+                              date: selectedDate,
+                            );
+                            if (amount == null) {
+                              showErrorDialog(sheetContext, _controller.errorMessage ?? 'Error');
+                              return;
+                            }
+
+                            final alert = await _controller.checkSubcategoryAlert(
+                              subcategory: selectedSubcategory!,
+                              amount: amount,
+                            );
+                            if (!sheetContext.mounted) return;
+                            if (alert != null) {
+                              final proceed = await _confirmHighExpense(sheetContext, alert);
+                              if (!proceed || !sheetContext.mounted) return;
+                            }
                           }
 
                           final success = isEditing
@@ -234,13 +281,9 @@ class _ExpenseViewState extends State<ExpenseView> {
     );
   }
 
-  /// Revisa el bloqueo de 1 mes ANTES de abrir el editor.
   void _maybeEdit(ExpenseModel expense) {
     if (_controller.isLocked(expense)) {
-      showErrorDialog(
-        context,
-        'Este gasto tiene más de un mes registrado, así que ya no se puede modificar.',
-      );
+      showErrorDialog(context, 'Este gasto tiene 30 días o más de antigüedad, así que ya no se puede modificar.');
       return;
     }
     _openExpenseSheet(existingExpense: expense);
@@ -248,10 +291,7 @@ class _ExpenseViewState extends State<ExpenseView> {
 
   void _maybeDelete(ExpenseModel expense) {
     if (_controller.isLocked(expense)) {
-      showErrorDialog(
-        context,
-        'Este gasto tiene más de un mes registrado, así que ya no se puede eliminar.',
-      );
+      showErrorDialog(context, 'Este gasto tiene 30 días o más de antigüedad, así que ya no se puede eliminar.');
       return;
     }
     _confirmDelete(expense);

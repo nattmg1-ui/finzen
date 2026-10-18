@@ -3,25 +3,32 @@ import '../services/income_service.dart';
 import '../services/expense_service.dart';
 import '../services/savings_goal_service.dart';
 import '../services/firestore_service.dart';
+import '../services/cycle_service.dart';
+import '../models/income_model.dart';
+import '../models/expense_model.dart';
 import '../models/savings_goal_model.dart';
 
-/// Alimenta la pantalla de Inicio: saldo general, top categorías de
-/// gasto, y la meta de ahorro principal — combinando Ingresos, Gastos
-/// y Metas en un solo lugar, igual que el maquetado.
+/// Alimenta la pantalla de Inicio:
+/// - Saldo general (acumulado): todos los ingresos - todos los gastos -
+///   dinero apartado en metas activas.
+/// - Ingresos y gastos del ciclo actual.
+/// - Top 3 categorías de gasto y la meta de ahorro principal.
 class HomeController extends ChangeNotifier {
   final IncomeService _incomeService = IncomeService();
   final ExpenseService _expenseService = ExpenseService();
   final SavingsGoalService _goalService = SavingsGoalService();
   final FirestoreService _firestoreService = FirestoreService();
+  final CycleService _cycleService = CycleService();
 
   bool isLoading = true;
   String userName = 'Usuario';
 
-  int totalIncome = 0;
-  int totalExpenses = 0;
-  int _totalAllocatedToGoals = 0;
-  Map<String, int> categoryTotals = {};
+  List<IncomeModel> _incomes = [];
+  List<ExpenseModel> _expenses = [];
   List<SavingsGoalModel> goals = [];
+
+  int cycleIncome = 0;
+  int cycleExpenses = 0;
 
   bool _incomeLoaded = false;
   bool _expensesLoaded = false;
@@ -35,40 +42,53 @@ class HomeController extends ChangeNotifier {
       }
     });
 
-    _incomeService.watchIncomes().listen((incomes) {
-      totalIncome = incomes.fold(0, (sum, i) => sum + i.amount);
+    _incomeService.watchIncomes().listen((data) {
+      _incomes = data;
       _incomeLoaded = true;
-      _checkLoaded();
+      _refresh();
     });
 
-    _expenseService.watchExpenses().listen((expenses) {
-      totalExpenses = expenses.fold(0, (sum, e) => sum + e.amount);
-      final map = <String, int>{};
-      for (final e in expenses) {
-        map[e.category] = (map[e.category] ?? 0) + e.amount;
-      }
-      categoryTotals = map;
+    _expenseService.watchExpenses().listen((data) {
+      _expenses = data;
       _expensesLoaded = true;
-      _checkLoaded();
+      _refresh();
     });
 
     _goalService.watchGoals().listen((data) {
       goals = data;
-      _totalAllocatedToGoals = data.where((g) => !g.completed).fold(0, (sum, g) => sum + g.currentAmount);
       _goalsLoaded = true;
-      _checkLoaded();
+      _refresh();
     });
   }
 
-  void _checkLoaded() {
+  Future<void> _refresh() async {
+    if (_incomeLoaded && _expensesLoaded) {
+      final currentCycle = await _cycleService.getCurrentCycle();
+      if (currentCycle != null) {
+        cycleIncome = _incomes.where((i) => currentCycle.contains(i.date)).fold(0, (sum, i) => sum + i.amount);
+        cycleExpenses = _expenses.where((e) => currentCycle.contains(e.date)).fold(0, (sum, e) => sum + e.amount);
+      } else {
+        cycleIncome = 0;
+        cycleExpenses = 0;
+      }
+    }
     if (_incomeLoaded && _expensesLoaded && _goalsLoaded) isLoading = false;
     notifyListeners();
   }
 
+  int get totalIncome => _incomes.fold(0, (sum, i) => sum + i.amount);
+  int get totalExpenses => _expenses.fold(0, (sum, e) => sum + e.amount);
+  int get _totalAllocatedToGoals => goals.where((g) => !g.completed).fold(0, (sum, g) => sum + g.currentAmount);
+
+  /// Saldo general acumulado.
   int get generalBalance => totalIncome - totalExpenses - _totalAllocatedToGoals;
 
   List<MapEntry<String, int>> get topCategories {
-    final entries = categoryTotals.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
+    final map = <String, int>{};
+    for (final e in _expenses) {
+      map[e.category] = (map[e.category] ?? 0) + e.amount;
+    }
+    final entries = map.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
     return entries.take(3).toList();
   }
 

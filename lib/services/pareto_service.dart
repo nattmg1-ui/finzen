@@ -18,7 +18,7 @@ class ParetoCategoryResult {
 }
 
 class ParetoResult {
-  final List<ParetoCategoryResult> categories; // ordenadas de mayor a menor
+  final List<ParetoCategoryResult> categories; // de mayor a menor
   final int totalCuboB;
 
   ParetoResult({required this.categories, required this.totalCuboB});
@@ -29,17 +29,19 @@ class ParetoResult {
       priorityCategories.isEmpty ? 0 : priorityCategories.last.cumulativePercentage;
 }
 
-/// Análisis de Pareto sobre el Cubo B (gasto Opcional/Deseos) del
-/// ciclo actual: qué categorías concentran la mayor parte del gasto
-/// discrecional.
+/// Análisis de Pareto sobre el Cubo B (Deseos) del ciclo actual.
 class ParetoService {
   final CycleService _cycleService = CycleService();
   final ExpenseService _expenseService = ExpenseService();
 
+  static const double _rangeMin = 75;
+  static const double _rangeMax = 85;
+  static const double _rangeMid = 80;
+
   double _round4(double value) => double.parse(value.toStringAsFixed(4));
 
-  /// Devuelve null si no hay al menos 2 categorías de gasto Opcional
-  /// con movimiento en el ciclo actual (RQNF).
+  /// Devuelve null si no hay al menos 2 categorías del Cubo B con gasto
+  /// en el ciclo actual (RQNF).
   Future<ParetoResult?> computeParetoForCurrentCycle() async {
     final currentCycle = await _cycleService.getCurrentCycle();
     if (currentCycle == null) return null;
@@ -57,6 +59,7 @@ class ParetoService {
     final totalCuboB = byCategory.values.fold(0, (sum, v) => sum + v);
     final sortedEntries = byCategory.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
 
+    // % categoría = (gasto de la categoría / gasto total del Cubo B) × 100
     final percentages = sortedEntries.map((e) => _round4(e.value / totalCuboB * 100)).toList();
 
     double cumulative = 0;
@@ -82,24 +85,25 @@ class ParetoService {
     return ParetoResult(categories: categories, totalCuboB: totalCuboB);
   }
 
-  /// Busca cuántas categorías (de mayor a menor) hacen falta para que
-  /// el % acumulado caiga entre 75% y 85% (RQNF). Si un salto se pasa
-  /// de 85%, elige el conteo más cercano al rango entre incluir una
-  /// categoría menos (por debajo de 75%) o una más (por encima de 85%).
+  /// Suma categorías de mayor a menor hasta que el acumulado quede
+  /// entre 75% y 85%. Si ninguna combinación cae en ese rango, compara
+  /// las dos combinaciones límite (una categoría menos, por debajo de
+  /// 75%, y una más, por encima de 85%) y elige la que tenga menor
+  /// diferencia absoluta respecto al 80%.
   int _selectPriorityCount(List<double> cumulativeList) {
     for (var i = 0; i < cumulativeList.length; i++) {
-      if (cumulativeList[i] >= 75) {
-        if (cumulativeList[i] <= 85) {
-          return i + 1;
-        }
-        if (i == 0) return 1;
-        final distBelow = 75 - cumulativeList[i - 1];
-        final distAbove = cumulativeList[i] - 85;
-        return distBelow <= distAbove ? i : i + 1;
-      }
+      if (cumulativeList[i] < _rangeMin) continue;
+
+      if (cumulativeList[i] <= _rangeMax) return i + 1;
+
+      if (i == 0) return 1;
+
+      final below = cumulativeList[i - 1];
+      final above = cumulativeList[i];
+      final diffBelow = (below - _rangeMid).abs();
+      final diffAbove = (above - _rangeMid).abs();
+      return diffBelow <= diffAbove ? i : i + 1;
     }
-    // Ni sumando todas las categorías se llega a 75% (gasto muy
-    // repartido): se incluyen todas las que hay.
     return cumulativeList.length;
   }
 }

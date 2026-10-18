@@ -3,24 +3,27 @@ import '../models/savings_goal_model.dart';
 import '../services/savings_goal_service.dart';
 import '../services/income_service.dart';
 import '../services/expense_service.dart';
+import '../services/monthly_budget_service.dart';
 
 class SavingsGoalController extends ChangeNotifier {
   final SavingsGoalService _service = SavingsGoalService();
   final IncomeService _incomeService = IncomeService();
   final ExpenseService _expenseService = ExpenseService();
+  final MonthlyBudgetService _budgetService = MonthlyBudgetService();
 
   static const List<String> priorities = ['Alta', 'Media', 'Baja'];
   static const List<String> types = ['Vital', 'Opcional'];
   static const String pausedMessage = 'Pausada: tus gastos básicos están en riesgo';
   static const int maxYearsAhead = 4;
 
+  /// RQNF: la cuota mensual no debe exceder el 20% del ingreso mensual.
+  static const double maxQuotaRatio = 0.20;
+
   List<SavingsGoalModel> goals = [];
   bool isLoading = true;
   String? errorMessage;
   String? adjustmentMessage;
 
-  int _totalIncome = 0;
-  int _totalVitalExpenses = 0;
   bool _isEvaluating = false;
 
   SavingsGoalController() {
@@ -38,15 +41,9 @@ class SavingsGoalController extends ChangeNotifier {
       },
     );
 
-    _incomeService.watchIncomes().listen((incomes) {
-      _totalIncome = incomes.fold(0, (sum, i) => sum + i.amount);
-      _evaluatePauseReactivation();
-    });
-
-    _expenseService.watchExpenses().listen((expenses) {
-      _totalVitalExpenses = expenses.where((e) => e.essentialType == 'Vital').fold(0, (sum, e) => sum + e.amount);
-      _evaluatePauseReactivation();
-    });
+    // Cualquier cambio en ingresos o gastos vuelve a evaluar el pausado.
+    _incomeService.watchIncomes().listen((_) => _evaluatePauseReactivation());
+    _expenseService.watchExpenses().listen((_) => _evaluatePauseReactivation());
   }
 
   int _monthsBetween(DateTime from, DateTime to) {
@@ -60,9 +57,8 @@ class SavingsGoalController extends ChangeNotifier {
     return remaining / months;
   }
 
-  /// Orden de pausado: ascendente de prioridad (Baja primero, luego
-  /// Media, luego Alta — pausamos lo menos importante primero). En
-  /// caso de empate, la de fecha límite MÁS LEJANA se pausa primero.
+  /// Orden de pausado: ascendente de prioridad (Baja, Media, Alta). En
+  /// empate, la de fecha límite más lejana se pausa primero.
   int _pauseOrderComparator(SavingsGoalModel a, SavingsGoalModel b) {
     const rank = {'Baja': 0, 'Media': 1, 'Alta': 2};
     final rankA = rank[a.priority] ?? 0;
@@ -71,33 +67,35 @@ class SavingsGoalController extends ChangeNotifier {
     return b.deadline.compareTo(a.deadline);
   }
 
-  /// El "motor" de pausado/reactivación. Se ejecuta cada vez que
-  /// cambian los ingresos, gastos, o las metas mismas.
+  /// Capacidad de ahorro = ingreso mensual - gastos básicos mensuales.
   ///
-  /// Pausar: primero agota las metas Opcionales activas (una por una,
-  /// en orden ascendente de prioridad, empate = fecha más lejana). Si
-  /// ya no quedan Opcionales activas que pausar y la cuota restante
-  /// sigue en riesgo, empieza a pausar Vitales con el mismo orden.
+  /// Pausar: si las cuotas de las metas activas superan la capacidad,
+  /// pausa primero las Opcionales y, si no alcanza, las Vitales.
   ///
-  /// Reactivar: en orden INVERSO al que se pausaron (la más reciente
-  /// en pausarse se reactiva primero), solo si el ingreso alcanza
-  /// para cubrir gastos básicos + esa cuota + las ya activas.
+  /// Reactivar: en orden inverso al que se pausaron, solo si la
+  /// capacidad alcanza para cubrir la cuota de la meta a reactivar.
   Future<void> _evaluatePauseReactivation() async {
     if (_isEvaluating) return;
     _isEvaluating = true;
     try {
-      double capacity = (_totalIncome - _totalVitalExpenses).toDouble();
+      final monthlyIncome = await _budgetService.monthlyIncome();
+
+      // Sin ingreso registrado en el ciclo no hay base para decidir;
+      // se conserva el estado actual de las metas.
+      if (monthlyIncome <= 0) return;
+
+      final monthlyBasic = await _budgetService.monthlyBasicExpenses();
+      double capacity = (monthlyIncome - monthlyBasic).toDouble();
       if (capacity < 0) capacity = 0;
 
       final relevantGoals = goals.where((g) => !g.completed).toList();
       final activeGoals = relevantGoals.where((g) => !g.paused).toList();
-      final pausedGoalsNewestFirst = relevantGoals.where((g) => g.paused).toList()
+      final pausedNewestFirst = relevantGoals.where((g) => g.paused).toList()
         ..sort((a, b) => (b.pausedAt ?? DateTime(0)).compareTo(a.pausedAt ?? DateTime(0)));
 
       final neededForActive = activeGoals.fold<double>(0, (sum, g) => sum + _quotaFor(g));
 
       if (neededForActive > capacity) {
-        // Hay que pausar: Opcionales activas primero, luego Vitales.
         final opcionalCandidates = activeGoals.where((g) => g.type == 'Opcional').toList()..sort(_pauseOrderComparator);
         final vitalCandidates = activeGoals.where((g) => g.type == 'Vital').toList()..sort(_pauseOrderComparator);
 
@@ -107,17 +105,15 @@ class SavingsGoalController extends ChangeNotifier {
           stillNeeded -= _quotaFor(candidate);
           await _service.setPaused(candidate.id, paused: true);
         }
-      } else if (pausedGoalsNewestFirst.isNotEmpty) {
-        // Hay margen: intenta reactivar empezando por la más reciente
-        // en haberse pausado.
+      } else if (pausedNewestFirst.isNotEmpty) {
         var freeCapacity = capacity - neededForActive;
-        for (final g in pausedGoalsNewestFirst) {
+        for (final g in pausedNewestFirst) {
           final quota = _quotaFor(g);
           if (quota <= freeCapacity) {
             await _service.setPaused(g.id, paused: false);
             freeCapacity -= quota;
           } else {
-            break; // mantiene el orden: si esta no cabe, no probamos las siguientes
+            break;
           }
         }
       }
@@ -143,6 +139,9 @@ class SavingsGoalController extends ChangeNotifier {
     return DateTime(today.year + maxYearsAhead, today.month, today.day);
   }
 
+  /// Devuelve la fecha límite final. Si la cuota mensual supera el 20%
+  /// del ingreso mensual, recalibra la fecha. Devuelve null si ni con
+  /// el máximo de 4 años la meta es viable.
   Future<DateTime?> _resolveViableDeadline({
     required int targetAmount,
     required int currentAmount,
@@ -150,20 +149,14 @@ class SavingsGoalController extends ChangeNotifier {
   }) async {
     final maxDeadline = maxAllowedDeadline();
     final remaining = targetAmount - currentAmount;
+    final monthlyIncome = await _budgetService.monthlyIncome();
 
-    final incomeList = await _incomeService.watchIncomes().first;
-    final totalIncome = incomeList.fold<int>(0, (sum, i) => sum + i.amount);
-
-    if (totalIncome <= 0 || remaining <= 0) {
+    if (monthlyIncome <= 0 || remaining <= 0) {
       if (requestedDeadline.isAfter(maxDeadline)) return null;
       return requestedDeadline;
     }
 
-    final maxMonthlyQuota = totalIncome * 0.20;
-    if (maxMonthlyQuota <= 0) {
-      if (requestedDeadline.isAfter(maxDeadline)) return null;
-      return requestedDeadline;
-    }
+    final maxMonthlyQuota = monthlyIncome * maxQuotaRatio;
 
     final today = DateTime.now();
     final requestedMonths = _monthsBetween(today, requestedDeadline).clamp(1, 999);
@@ -177,15 +170,30 @@ class SavingsGoalController extends ChangeNotifier {
     final minMonthsNeeded = (remaining / maxMonthlyQuota).ceil();
     final adjustedDeadline = DateTime(today.year, today.month + minMonthsNeeded, today.day);
 
-    if (adjustedDeadline.isAfter(maxDeadline)) {
-      return null;
-    }
+    if (adjustedDeadline.isAfter(maxDeadline)) return null;
 
-    adjustmentMessage = 'Tu fecha límite no era viable con tu ingreso registrado '
-        '(requería ahorrar más del 20% mensual). El sistema la ajustó '
+    adjustmentMessage = 'Tu fecha límite no era viable con tu ingreso mensual '
+        '(requería ahorrar más del 20% al mes). El sistema la ajustó '
         'automáticamente al ${adjustedDeadline.day}/${adjustedDeadline.month}/${adjustedDeadline.year}.';
 
     return adjustedDeadline;
+  }
+
+  String? _validateCommon({
+    required String name,
+    required int? targetAmount,
+    required String priority,
+    required String type,
+    required DateTime deadline,
+  }) {
+    if (name.trim().isEmpty) return 'El nombre de la meta es obligatorio.';
+    if (targetAmount == null || targetAmount <= 0) return 'Ingresa un monto objetivo numérico mayor a cero.';
+    if (!priorities.contains(priority)) return 'Selecciona una prioridad válida.';
+    if (!types.contains(type)) return 'Selecciona un tipo válido (Vital u Opcional).';
+    final today = DateTime.now();
+    final todayAtMidnight = DateTime(today.year, today.month, today.day);
+    if (!deadline.isAfter(todayAtMidnight)) return 'La fecha límite debe ser posterior a hoy.';
+    return null;
   }
 
   Future<bool> addGoal({
@@ -195,31 +203,16 @@ class SavingsGoalController extends ChangeNotifier {
     required String type,
     required DateTime deadline,
   }) async {
-    if (name.trim().isEmpty) {
-      errorMessage = 'El nombre de la meta es obligatorio';
-      notifyListeners();
-      return false;
-    }
     final targetAmount = int.tryParse(targetAmountText.trim());
-    if (targetAmount == null || targetAmount <= 0) {
-      errorMessage = 'Ingresa un monto objetivo numérico mayor a cero';
-      notifyListeners();
-      return false;
-    }
-    if (!priorities.contains(priority)) {
-      errorMessage = 'Selecciona una prioridad válida';
-      notifyListeners();
-      return false;
-    }
-    if (!types.contains(type)) {
-      errorMessage = 'Selecciona un tipo válido (Vital u Opcional)';
-      notifyListeners();
-      return false;
-    }
-    final today = DateTime.now();
-    final todayAtMidnight = DateTime(today.year, today.month, today.day);
-    if (!deadline.isAfter(todayAtMidnight)) {
-      errorMessage = 'La fecha límite debe ser posterior a hoy';
+    final validationError = _validateCommon(
+      name: name,
+      targetAmount: targetAmount,
+      priority: priority,
+      type: type,
+      deadline: deadline,
+    );
+    if (validationError != null) {
+      errorMessage = validationError;
       notifyListeners();
       return false;
     }
@@ -227,14 +220,14 @@ class SavingsGoalController extends ChangeNotifier {
     try {
       adjustmentMessage = null;
       final finalDeadline = await _resolveViableDeadline(
-        targetAmount: targetAmount,
+        targetAmount: targetAmount!,
         currentAmount: 0,
         requestedDeadline: deadline,
       );
 
       if (finalDeadline == null) {
         errorMessage = 'Esta meta no es viable, no se puede crear: incluso ahorrando el máximo recomendado '
-            '(20% de tu ingreso) necesitarías más de $maxYearsAhead años para cumplirla. '
+            '(20% de tu ingreso mensual) necesitarías más de $maxYearsAhead años para cumplirla. '
             'Reduce el monto objetivo o registra más ingresos.';
         notifyListeners();
         return false;
@@ -260,31 +253,16 @@ class SavingsGoalController extends ChangeNotifier {
     required String type,
     required DateTime deadline,
   }) async {
-    if (name.trim().isEmpty) {
-      errorMessage = 'El nombre de la meta es obligatorio';
-      notifyListeners();
-      return false;
-    }
     final targetAmount = int.tryParse(targetAmountText.trim());
-    if (targetAmount == null || targetAmount <= 0) {
-      errorMessage = 'Ingresa un monto objetivo numérico mayor a cero';
-      notifyListeners();
-      return false;
-    }
-    if (!priorities.contains(priority)) {
-      errorMessage = 'Selecciona una prioridad válida';
-      notifyListeners();
-      return false;
-    }
-    if (!types.contains(type)) {
-      errorMessage = 'Selecciona un tipo válido (Vital u Opcional)';
-      notifyListeners();
-      return false;
-    }
-    final today = DateTime.now();
-    final todayAtMidnight = DateTime(today.year, today.month, today.day);
-    if (!deadline.isAfter(todayAtMidnight)) {
-      errorMessage = 'La nueva fecha límite debe ser posterior a hoy';
+    final validationError = _validateCommon(
+      name: name,
+      targetAmount: targetAmount,
+      priority: priority,
+      type: type,
+      deadline: deadline,
+    );
+    if (validationError != null) {
+      errorMessage = validationError;
       notifyListeners();
       return false;
     }
@@ -292,14 +270,14 @@ class SavingsGoalController extends ChangeNotifier {
     try {
       adjustmentMessage = null;
       final finalDeadline = await _resolveViableDeadline(
-        targetAmount: targetAmount,
+        targetAmount: targetAmount!,
         currentAmount: currentAmount,
         requestedDeadline: deadline,
       );
 
       if (finalDeadline == null) {
         errorMessage = 'Esta meta no es viable, no se puede guardar así: incluso ahorrando el máximo recomendado '
-            '(20% de tu ingreso) necesitarías más de $maxYearsAhead años para cumplirla. '
+            '(20% de tu ingreso mensual) necesitarías más de $maxYearsAhead años para cumplirla. '
             'Reduce el monto objetivo o elige una fecha distinta.';
         notifyListeners();
         return false;
@@ -339,7 +317,10 @@ class SavingsGoalController extends ChangeNotifier {
         return false;
       }
 
-      if (suggested.year == goal.deadline.year && suggested.month == goal.deadline.month && suggested.day == goal.deadline.day) {
+      final sameDate = suggested.year == goal.deadline.year &&
+          suggested.month == goal.deadline.month &&
+          suggested.day == goal.deadline.day;
+      if (sameDate) {
         adjustmentMessage = 'Tu fecha límite actual sigue siendo viable con tu situación de hoy. No hubo cambios.';
         notifyListeners();
         return true;
@@ -364,7 +345,7 @@ class SavingsGoalController extends ChangeNotifier {
     }
   }
 
-  /// RQNF: no se permiten aportaciones manuales mientras la meta esté pausada.
+  /// RQNF: no se permiten aportaciones manuales a una meta pausada.
   Future<({bool success, bool justCompleted})> addFunds(SavingsGoalModel goal, String amountText) async {
     if (goal.paused) {
       errorMessage = 'Esta meta está pausada. No puedes aportar mientras tanto.';
@@ -374,7 +355,7 @@ class SavingsGoalController extends ChangeNotifier {
 
     final amount = int.tryParse(amountText.trim());
     if (amount == null || amount <= 0) {
-      errorMessage = 'Ingresa un monto numérico válido mayor a cero';
+      errorMessage = 'Ingresa un monto numérico válido mayor a cero.';
       notifyListeners();
       return (success: false, justCompleted: false);
     }

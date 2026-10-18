@@ -2,13 +2,33 @@ import 'package:flutter/material.dart';
 import '../data/expense_categories.dart';
 import '../models/expense_model.dart';
 import '../services/expense_service.dart';
+import '../services/cycle_service.dart';
 
 enum ExpenseFilter { todos, vital, opcional }
 
+/// Resultado de la verificación preventiva de un gasto nuevo.
+class SubcategoryAlert {
+  final String subcategory;
+  final int amount;
+  final double averagePerCycle;
+
+  SubcategoryAlert({required this.subcategory, required this.amount, required this.averagePerCycle});
+
+  double get timesAverage => averagePerCycle == 0 ? 0 : amount / averagePerCycle;
+}
+
 class ExpenseController extends ChangeNotifier {
   final ExpenseService _service = ExpenseService();
+  final CycleService _cycleService = CycleService();
 
+  /// RQNF: no se registra, modifica ni elimina un gasto con fecha de
+  /// 30 días o más de antigüedad.
   static const int lockAfterDays = 30;
+
+  /// RQF: alerta preventiva cuando el gasto es igual o mayor al triple
+  /// del promedio por ciclo de su subcategoría.
+  static const double alertMultiplier = 3.0;
+  static const int requiredCyclesForAlert = 3;
 
   List<ExpenseModel> _allExpenses = [];
   bool isLoading = true;
@@ -60,11 +80,7 @@ class ExpenseController extends ChangeNotifier {
     return map;
   }
 
-    /// true si ya pasó un mes (o más) desde la FECHA DEL GASTO (la que
-  /// el usuario eligió al registrarlo),  Así, si agregas hoy un gasto con fecha 
-  //de hace 2 meses,
-  /// queda bloqueado de inmediato — que es lo que se espera en la vida
-  /// real (no cuándo lo tecleaste, sino cuándo ocurrió).
+  /// true si la fecha del gasto tiene 30 días o más de antigüedad.
   bool isLocked(ExpenseModel expense) {
     return DateTime.now().difference(expense.date).inDays >= lockAfterDays;
   }
@@ -77,6 +93,67 @@ class ExpenseController extends ChangeNotifier {
     }
   }
 
+  /// Valida los datos de un gasto (mismas reglas para registrar y
+  /// modificar). Devuelve el monto si todo es válido; si no, deja el
+  /// motivo en errorMessage y devuelve null.
+  int? validateInput({
+    required String category,
+    required String subcategory,
+    required String amountText,
+    required DateTime date,
+  }) {
+    final amount = int.tryParse(amountText.trim());
+    if (amount == null || amount <= 0) {
+      errorMessage = 'Ingresa un monto numérico mayor a cero.';
+      notifyListeners();
+      return null;
+    }
+    if (category.isEmpty || subcategory.isEmpty) {
+      errorMessage = 'Selecciona categoría y subcategoría.';
+      notifyListeners();
+      return null;
+    }
+    final now = DateTime.now();
+    if (date.isAfter(now)) {
+      errorMessage = 'La fecha del gasto no puede ser posterior a hoy.';
+      notifyListeners();
+      return null;
+    }
+    if (now.difference(date).inDays >= lockAfterDays) {
+      errorMessage = 'No puedes usar una fecha de 30 días o más de antigüedad. Elige una fecha más reciente.';
+      notifyListeners();
+      return null;
+    }
+    return amount;
+  }
+
+  /// RQF/RQNF: si la subcategoría tiene registros en cada uno de los
+  /// últimos 3 ciclos completos, compara el monto contra el promedio
+  /// por ciclo de esa subcategoría. Devuelve una alerta si el monto es
+  /// igual o mayor al triple de ese promedio; si no, devuelve null.
+  Future<SubcategoryAlert?> checkSubcategoryAlert({
+    required String subcategory,
+    required int amount,
+  }) async {
+    final cycles = await _cycleService.getPreviousCycles(requiredCyclesForAlert);
+    if (cycles.length < requiredCyclesForAlert) return null;
+
+    final totalsPerCycle = <int>[];
+    for (final cycle in cycles) {
+      final inCycle = _allExpenses.where((e) => e.subcategory == subcategory && cycle.contains(e.date)).toList();
+      if (inCycle.isEmpty) return null; // falta historial en alguno de los 3 ciclos
+      totalsPerCycle.add(inCycle.fold(0, (sum, e) => sum + e.amount));
+    }
+
+    final average = double.parse((totalsPerCycle.reduce((a, b) => a + b) / totalsPerCycle.length).toStringAsFixed(4));
+    if (average <= 0) return null;
+
+    if (amount >= average * alertMultiplier) {
+      return SubcategoryAlert(subcategory: subcategory, amount: amount, averagePerCycle: average);
+    }
+    return null;
+  }
+
   Future<bool> addExpense({
     required String category,
     required String subcategory,
@@ -84,24 +161,8 @@ class ExpenseController extends ChangeNotifier {
     required String description,
     required DateTime date,
   }) async {
-    final amount = int.tryParse(amountText.trim());
-    if (amount == null || amount < 0) {
-      errorMessage = 'Ingresa un monto numérico válido (0 o mayor)';
-      notifyListeners();
-      return false;
-    }
-    if (category.isEmpty || subcategory.isEmpty) {
-      errorMessage = 'Selecciona categoría y subcategoría';
-      notifyListeners();
-      return false;
-    }
-    // Misma regla que el bloqueo de edición/eliminación: no se puede
-    // registrar un gasto cuya fecha ya tenga un mes o más de atraso.
-    if (DateTime.now().difference(date).inDays >= lockAfterDays) {
-      errorMessage = 'No puedes registrar un gasto con más de un mes de atraso. Elige una fecha más reciente.';
-      notifyListeners();
-      return false;
-    }
+    final amount = validateInput(category: category, subcategory: subcategory, amountText: amountText, date: date);
+    if (amount == null) return false;
 
     final essentialType = classifySubcategory(subcategory);
 
@@ -133,27 +194,13 @@ class ExpenseController extends ChangeNotifier {
   }) async {
     final existing = _findById(expenseId);
     if (existing != null && isLocked(existing)) {
-      errorMessage = 'Este gasto ya tiene más de un mes registrado y ya no se puede modificar.';
+      errorMessage = 'Este gasto tiene 30 días o más de antigüedad y ya no se puede modificar.';
       notifyListeners();
       return false;
     }
 
-    final amount = int.tryParse(amountText.trim());
-    if (amount == null || amount < 0) {
-      errorMessage = 'Ingresa un monto numérico válido (0 o mayor)';
-      notifyListeners();
-      return false;
-    }
-    if (category.isEmpty || subcategory.isEmpty) {
-      errorMessage = 'Selecciona categoría y subcategoría';
-      notifyListeners();
-      return false;
-    }
-    if (DateTime.now().difference(date).inDays >= lockAfterDays) {
-      errorMessage = 'No puedes dejar un gasto con más de un mes de atraso. Elige una fecha más reciente.';
-      notifyListeners();
-      return false;
-    }
+    final amount = validateInput(category: category, subcategory: subcategory, amountText: amountText, date: date);
+    if (amount == null) return false;
 
     final essentialType = classifySubcategory(subcategory);
 
@@ -179,7 +226,7 @@ class ExpenseController extends ChangeNotifier {
   Future<bool> deleteExpense(String expenseId) async {
     final existing = _findById(expenseId);
     if (existing != null && isLocked(existing)) {
-      errorMessage = 'Este gasto ya tiene más de un mes registrado y ya no se puede eliminar.';
+      errorMessage = 'Este gasto tiene 30 días o más de antigüedad y ya no se puede eliminar.';
       notifyListeners();
       return false;
     }

@@ -2,27 +2,26 @@ import 'package:flutter/material.dart';
 import '../models/notification_model.dart';
 import '../models/expense_model.dart';
 import '../services/notification_service.dart';
-import '../services/income_service.dart';
 import '../services/expense_service.dart';
 import '../services/savings_goal_service.dart';
 import '../services/firestore_service.dart';
 import '../services/local_notification_service.dart';
 import '../services/financial_mode_service.dart';
+import '../services/cycle_service.dart';
+import '../services/cycle_aggregate_service.dart';
 
-/// El "motor" de notificaciones del Módulo 6. Se ejecuta cada vez que
-/// se llama a evaluateAndGenerate() (normalmente al abrir el
-/// Dashboard) y decide si toca generar alguna notificación nueva,
-/// respetando: horario silencioso, límite de 2/día, preferencias del
-/// usuario, y el contexto financiero (gastos vs ingresos). Cada
-/// notificación generada también dispara un banner real del sistema.
+/// Motor de notificaciones del Módulo 6 (Anexo B). Se ejecuta al abrir
+/// el Dashboard. Respeta: horario silencioso, máximo 2 por día,
+/// preferencias del usuario y el contexto del ciclo actual.
 class NotificationController extends ChangeNotifier {
   final NotificationService _notifService = NotificationService();
   final LocalNotificationService _localNotifService = LocalNotificationService();
-  final IncomeService _incomeService = IncomeService();
   final ExpenseService _expenseService = ExpenseService();
   final SavingsGoalService _goalService = SavingsGoalService();
   final FirestoreService _firestoreService = FirestoreService();
   final FinancialModeService _financialModeService = FinancialModeService();
+  final CycleService _cycleService = CycleService();
+  final CycleAggregateService _aggregateService = CycleAggregateService();
 
   static const int maxPerDay = 2;
   static const int quietHourStart = 23; // 11:00 pm
@@ -51,9 +50,7 @@ class NotificationController extends ChangeNotifier {
     return '${now.year}-${now.month}-${now.day}';
   }
 
-  /// Guarda la notificación en Firestore (para el historial dentro de
-  /// la app) Y dispara el banner real del sistema operativo al mismo
-  /// tiempo, con el mismo título y mensaje.
+  /// Guarda la notificación en Firestore y muestra el banner del sistema.
   Future<void> _emit({
     required String type,
     required String title,
@@ -64,9 +61,6 @@ class NotificationController extends ChangeNotifier {
     await _localNotifService.show(title: title, body: message);
   }
 
-  /// Corre las reglas del Módulo 6 y genera hasta 2 notificaciones
-  /// nuevas por día. No hace nada si está en horario silencioso o si
-  /// ya se alcanzó el límite diario.
   Future<void> evaluateAndGenerate() async {
     if (_isQuietHours) return;
 
@@ -74,20 +68,26 @@ class NotificationController extends ChangeNotifier {
     if (remaining <= 0) return;
 
     final user = await _firestoreService.fetchCurrentUserProfile();
-    final incomes = await _incomeService.watchIncomes().first;
     final expenses = await _expenseService.watchExpenses().first;
     final goals = await _goalService.watchGoals().first;
-
-    final totalIncome = incomes.fold<int>(0, (sum, i) => sum + i.amount);
-    final totalExpenses = expenses.fold<int>(0, (sum, e) => sum + e.amount);
 
     final expenseAlertsOn = user?.notifyExpenseAlerts ?? true;
     final goalAlertsOn = user?.notifyGoalAlerts ?? true;
 
-    // Regla 1: margen entre ingreso y gasto menor al 10% (RQF explícito).
-    if (remaining > 0 && expenseAlertsOn && totalIncome > 0) {
-      final margin = (totalIncome - totalExpenses) / totalIncome;
-      if (margin < 0.10 && margin >= 0) {
+    // Ingreso y gasto del CICLO ACTUAL (no del historial completo).
+    final currentCycle = await _cycleService.getCurrentCycle();
+    var cycleIncome = 0;
+    var cycleExpenses = 0;
+    if (currentCycle != null) {
+      cycleIncome = await _cycleService.incomeInCycle(currentCycle);
+      final aggregate = await _aggregateService.aggregateForCycle(currentCycle);
+      cycleExpenses = aggregate.totalSpent;
+    }
+
+    // Regla 1: margen del ciclo menor al 10% del ingreso.
+    if (remaining > 0 && expenseAlertsOn && cycleIncome > 0) {
+      final margin = (cycleIncome - cycleExpenses) / cycleIncome;
+      if (margin >= 0 && margin < 0.10) {
         final dedupKey = 'margin_warning_${_todayKey()}';
         if (!await _notifService.existsWithDedupKey(dedupKey)) {
           await _emit(
@@ -102,7 +102,8 @@ class NotificationController extends ChangeNotifier {
       }
     }
 
-    // Regla 2: alguna categoría gastó más del 200% de su promedio histórico.
+    // Regla 2: gasto de una categoría en el mes actual supera el 200% de
+    // su promedio histórico (mínimo 3 registros previos en esa categoría).
     if (remaining > 0 && expenseAlertsOn) {
       final spikeCategory = _findCategorySpike(expenses);
       if (spikeCategory != null) {
@@ -119,7 +120,7 @@ class NotificationController extends ChangeNotifier {
       }
     }
 
-    // Regla 3: alguna meta llegó al 50% (una sola vez por meta, no cada día).
+    // Regla 3: una meta llega al 50% (una sola vez por meta).
     if (remaining > 0 && goalAlertsOn) {
       for (final goal in goals.where((g) => !g.completed)) {
         if (goal.targetAmount == 0) continue;
@@ -140,12 +141,13 @@ class NotificationController extends ChangeNotifier {
       }
     }
 
-    // Regla 4: mensaje de contexto — apoyo si gastos>ingresos, presión
-    // de ahorro si te está sobrando bastante (RQNF de tono adaptativo).
-    if (remaining > 0 && expenseAlertsOn && totalIncome > 0)  {
+    // Regla 4: contexto del ciclo.
+    // 4a: gastos > ingresos del ciclo -> mensaje de apoyo.
+    // 4b: margen >= 20% y sin Modo de Estabilidad -> presión de ahorro.
+    if (remaining > 0 && expenseAlertsOn && currentCycle != null) {
       final dedupKey = 'context_message_${_todayKey()}';
       if (!await _notifService.existsWithDedupKey(dedupKey)) {
-        if (totalExpenses > totalIncome) {
+        if (cycleExpenses > 0 && cycleExpenses > cycleIncome) {
           await _emit(
             type: 'support_message',
             title: 'Estamos contigo',
@@ -154,11 +156,9 @@ class NotificationController extends ChangeNotifier {
             dedupKey: dedupKey,
           );
           remaining--;
-        } else {
-          final marginPercent = ((totalIncome - totalExpenses) / totalIncome * 100).round();
+        } else if (cycleIncome > 0) {
+          final marginPercent = ((cycleIncome - cycleExpenses) / cycleIncome * 100).round();
           final financialMode = await _financialModeService.evaluate();
-          // RQNF: si los gastos esenciales superan el ingreso, se
-          // suprime la notificación de presión de ahorro.
           if (marginPercent >= 20 && !financialMode.isStabilityMode) {
             await _emit(
               type: 'saving_pressure',
@@ -174,27 +174,27 @@ class NotificationController extends ChangeNotifier {
     }
   }
 
-  /// Compara el gasto de este mes por categoría contra el promedio
-  /// histórico de esa misma categoría (simplificación de "promedio de
-  /// los últimos 3 meses" del maquetado, usando todo el historial
-  /// disponible en vez de exactamente 3 ciclos).
+  /// Compara el gasto de cada categoría en el mes actual contra el
+  /// promedio de sus registros previos (mínimo 3 registros previos).
   String? _findCategorySpike(List<ExpenseModel> expenses) {
     final now = DateTime.now();
-    final byCategoryAll = <String, List<int>>{};
-    final byCategoryThisMonth = <String, int>{};
+    final previousByCategory = <String, List<int>>{};
+    final thisMonthByCategory = <String, int>{};
 
     for (final e in expenses) {
-      byCategoryAll.putIfAbsent(e.category, () => []).add(e.amount);
-      if (e.date.year == now.year && e.date.month == now.month) {
-        byCategoryThisMonth[e.category] = (byCategoryThisMonth[e.category] ?? 0) + e.amount;
+      final isThisMonth = e.date.year == now.year && e.date.month == now.month;
+      if (isThisMonth) {
+        thisMonthByCategory[e.category] = (thisMonthByCategory[e.category] ?? 0) + e.amount;
+      } else {
+        previousByCategory.putIfAbsent(e.category, () => []).add(e.amount);
       }
     }
 
-    for (final entry in byCategoryThisMonth.entries) {
-      final history = byCategoryAll[entry.key] ?? [];
+    for (final entry in thisMonthByCategory.entries) {
+      final history = previousByCategory[entry.key] ?? [];
       if (history.length < 3) continue;
-      final avg = history.reduce((a, b) => a + b) / history.length;
-      if (avg > 0 && entry.value > avg * 2) {
+      final average = history.reduce((a, b) => a + b) / history.length;
+      if (average > 0 && entry.value > average * 2) {
         return entry.key;
       }
     }

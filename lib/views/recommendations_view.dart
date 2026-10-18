@@ -1,5 +1,8 @@
 import 'package:flutter/material.dart';
 import '../controllers/recommendations_controller.dart';
+import '../data/onboarding_recommendations.dart';
+import '../services/reference_income_service.dart';
+import '../services/tcm_service.dart';
 import 'lesson_detail_view.dart';
 
 class RecommendationsView extends StatefulWidget {
@@ -29,6 +32,49 @@ class _RecommendationsViewState extends State<RecommendationsView> {
     );
   }
 
+  Widget _lessonLink(String title, VoidCallback onTap) {
+    return InkWell(
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 6),
+        child: Row(
+          children: [
+            const Icon(Icons.article_outlined, size: 18, color: Color(0xFFE89A3C)),
+            const SizedBox(width: 8),
+            Expanded(child: Text(title, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold))),
+            const Icon(Icons.chevron_right, size: 18),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Módulo 1: recomendaciones generales de los primeros 14 días.
+  Widget? _buildOnboarding() {
+    final onboarding = _controller.onboarding;
+    final day = _controller.onboardingDay;
+    if (onboarding == null || day == null) return null;
+
+    return _sectionCard(
+      title: 'Recomendaciones para empezar (día $day de $onboardingDays)',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(onboarding.message, style: const TextStyle(fontSize: 13)),
+          const SizedBox(height: 12),
+          const Text('Lecciones para ti', style: TextStyle(fontWeight: FontWeight.w500, fontSize: 13)),
+          const SizedBox(height: 4),
+          ...onboarding.lessons.map(
+            (lesson) => _lessonLink(
+              lesson.title,
+              () => Navigator.push(context, MaterialPageRoute(builder: (context) => LessonDetailView(lesson: lesson))),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildModeBanner() {
     final mode = _controller.financialMode;
     if (mode == null) return const SizedBox.shrink();
@@ -44,7 +90,7 @@ class _RecommendationsViewState extends State<RecommendationsView> {
             SizedBox(width: 12),
             Expanded(
               child: Text(
-                'Modo de contingencia activo: no detectamos actividad de ingreso este ciclo. '
+                'Modo de contingencia activo: no registraste ingresos en este ciclo. '
                 'Pausamos las comparaciones históricas y nos enfocamos en ayudarte a reducir gastos esenciales.',
                 style: TextStyle(fontSize: 13),
               ),
@@ -66,7 +112,7 @@ class _RecommendationsViewState extends State<RecommendationsView> {
             Expanded(
               child: Text(
                 'Tus gastos esenciales superan tu ingreso disponible este ciclo. Pausamos las alertas '
-                'de ahorro (regla 50/30/20) para enfocarnos en tu estabilidad financiera.',
+                'de ahorro de la regla 50/30/20 para enfocarnos en tu estabilidad financiera.',
                 style: TextStyle(fontSize: 13),
               ),
             ),
@@ -130,23 +176,56 @@ class _RecommendationsViewState extends State<RecommendationsView> {
     );
   }
 
+  String _referenceSourceLabel(ReferenceIncomeSource source) {
+    switch (source) {
+      case ReferenceIncomeSource.safetyBase:
+        return 'tu Ingreso Base de Seguridad';
+      case ReferenceIncomeSource.diagnosis:
+        return 'el ingreso que declaraste en tu diagnóstico';
+      case ReferenceIncomeSource.cycle:
+        return 'tu ingreso de este ciclo';
+    }
+  }
+
   Widget _buildProjection() {
     final result = _controller.smoothingResult;
     if (result == null) {
       return const Text('Sin datos suficientes todavía.');
     }
-    if (result.isCalibrating) {
-      return Text(
-        'Llevas ${result.recordsSoFar} de ${result.recordsNeeded} gastos registrados. '
-        'Mientras tanto, tu proyección estimada es de \$${result.projection.toStringAsFixed(0)} '
-        'para este ciclo, basada en tu diagnóstico inicial.',
-        style: const TextStyle(fontSize: 13),
-      );
-    }
-    return Text(
-      'Se espera que termines este ciclo gastando alrededor de \$${result.projection.toStringAsFixed(0)} MXN, '
-      'según tu patrón reciente de gasto.',
-      style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
+
+    final amount = result.projection.toStringAsFixed(0);
+    final mainText = result.isCalibrating
+        ? 'Tu primer ciclo todavía no termina. Por ahora, tu gasto estimado para este ciclo es de \$$amount MXN, '
+            'según lo que declaraste en tu diagnóstico.'
+        : 'Se espera que termines este ciclo gastando alrededor de \$$amount MXN, según tu patrón reciente de gasto.';
+
+    final reference = _controller.referenceIncome;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(mainText, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500)),
+        if (_controller.projectionExceedsIncome && reference != null) ...[
+          const SizedBox(height: 12),
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(color: Colors.red.withOpacity(0.12), borderRadius: BorderRadius.circular(12)),
+            child: Row(
+              children: [
+                const Icon(Icons.warning_amber_rounded, color: Colors.red, size: 20),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Esta proyección supera ${_referenceSourceLabel(reference.source)} '
+                    '(\$${reference.amount} MXN). Revisa tus gastos para no quedarte corto.',
+                    style: const TextStyle(fontSize: 13, color: Colors.red),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ],
     );
   }
 
@@ -156,8 +235,8 @@ class _RecommendationsViewState extends State<RecommendationsView> {
     return _sectionCard(
       title: 'Ingreso Base de Seguridad',
       child: Text(
-        'Para planear tu presupuesto con un ingreso variable, usa \$$ibs MXN como referencia — '
-        'es el monto más bajo que has tenido en tus últimos 3 ciclos.',
+        'Para planear tu presupuesto con un ingreso variable, usa \$$ibs MXN como referencia: '
+        'es el ingreso más bajo que registraste en tus últimos 3 ciclos.',
         style: const TextStyle(fontSize: 13),
       ),
     );
@@ -198,27 +277,19 @@ class _RecommendationsViewState extends State<RecommendationsView> {
     );
   }
 
-  Widget _buildTcm() {
-    final tcm = _controller.tcmResult;
-    if (tcm == null) {
-      return const Text(
-        'Aún no detectamos un incremento de ingreso entre este ciclo y el anterior.',
-        style: TextStyle(fontSize: 13),
-      );
-    }
-
+  Widget _buildTcm(TcmResult tcm) {
     final percent = (tcm.tcm * 100).toStringAsFixed(1);
 
     if (tcm.exceedsThreshold) {
       return Text(
-        'Tu ingreso subió \$${tcm.incomeDelta} este ciclo, pero destinaste el $percent% de ese '
-        'aumento a gasto opcional en vez de ahorrarlo. Considera aportar la diferencia a una meta.',
+        'Tu ingreso subió \$${tcm.incomeDelta} respecto al ciclo anterior, y destinaste el $percent% de ese '
+        'aumento a gasto opcional en vez de ahorrarlo. Considera aportar esa diferencia a una meta de ahorro.',
         style: const TextStyle(fontSize: 13),
       );
     }
 
     return Text(
-      'Tu ingreso subió \$${tcm.incomeDelta} este ciclo, y solo destinaste el $percent% de ese '
+      'Tu ingreso subió \$${tcm.incomeDelta} respecto al ciclo anterior, y destinaste el $percent% de ese '
       'aumento a gasto opcional. Vas por buen camino.',
       style: const TextStyle(fontSize: 13),
     );
@@ -226,6 +297,7 @@ class _RecommendationsViewState extends State<RecommendationsView> {
 
   Widget _buildHistoryLockedMessage() {
     return Container(
+      margin: const EdgeInsets.only(bottom: 16),
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(color: Colors.blue.withOpacity(0.12), borderRadius: BorderRadius.circular(12)),
       child: const Row(
@@ -234,8 +306,8 @@ class _RecommendationsViewState extends State<RecommendationsView> {
           SizedBox(width: 12),
           Expanded(
             child: Text(
-              'Necesitas al menos 3 ciclos completos de historial (según tu frecuencia de ingreso) '
-              'para desbloquear la detección de anomalías y de gasto impulsivo.',
+              'Necesitas al menos 3 ciclos completos de historial para desbloquear la detección '
+              'de anomalías y de gasto impulsivo.',
               style: TextStyle(fontSize: 13),
             ),
           ),
@@ -271,42 +343,6 @@ class _RecommendationsViewState extends State<RecommendationsView> {
     );
   }
 
-    Widget? _buildEducationSuggestion() {
-    final lesson = _controller.suggestedLesson;
-    final challenge = _controller.challengeSuggestion;
-    if (lesson == null && challenge == null) return null;
-
-    return _sectionCard(
-      title: 'Para ti',
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          if (challenge != null) ...[
-            const Text('Reto sugerido', style: TextStyle(fontWeight: FontWeight.w500, fontSize: 13)),
-            const SizedBox(height: 6),
-            Text(challenge, style: const TextStyle(fontSize: 13)),
-            const SizedBox(height: 16),
-          ],
-          if (lesson != null) ...[
-            const Text('Lección recomendada', style: TextStyle(fontWeight: FontWeight.w500, fontSize: 13)),
-            const SizedBox(height: 6),
-            InkWell(
-              onTap: () => Navigator.push(context, MaterialPageRoute(builder: (context) => LessonDetailView(lesson: lesson))),
-              child: Row(
-                children: [
-                  const Icon(Icons.article_outlined, size: 18, color: Color(0xFFE89A3C)),
-                  const SizedBox(width: 8),
-                  Expanded(child: Text(lesson.title, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold))),
-                  const Icon(Icons.chevron_right, size: 18),
-                ],
-              ),
-            ),
-          ],
-        ],
-      ),
-    );
-  }
-
   Widget _buildImpulsive() {
     final impulsive = _controller.impulsiveCategories;
     if (impulsive.isEmpty) {
@@ -334,6 +370,35 @@ class _RecommendationsViewState extends State<RecommendationsView> {
     );
   }
 
+  Widget? _buildEducationSuggestion() {
+    final lesson = _controller.suggestedLesson;
+    final challenge = _controller.challengeSuggestion;
+    if (lesson == null && challenge == null) return null;
+
+    return _sectionCard(
+      title: 'Para ti',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (challenge != null) ...[
+            const Text('Reto sugerido', style: TextStyle(fontWeight: FontWeight.w500, fontSize: 13)),
+            const SizedBox(height: 6),
+            Text(challenge, style: const TextStyle(fontSize: 13)),
+            const SizedBox(height: 16),
+          ],
+          if (lesson != null) ...[
+            const Text('Lección recomendada', style: TextStyle(fontWeight: FontWeight.w500, fontSize: 13)),
+            const SizedBox(height: 2),
+            _lessonLink(
+              lesson.title,
+              () => Navigator.push(context, MaterialPageRoute(builder: (context) => LessonDetailView(lesson: lesson))),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
@@ -341,6 +406,9 @@ class _RecommendationsViewState extends State<RecommendationsView> {
       builder: (context, child) {
         final mode = _controller.financialMode;
         final showHistoricalSections = mode == null || !mode.isContingencyMode;
+        final onboardingCard = _buildOnboarding();
+        final educationSuggestion = _buildEducationSuggestion();
+        final tcm = _controller.tcmResult;
 
         return Scaffold(
           appBar: AppBar(title: const Text('Recomendaciones'), elevation: 0),
@@ -350,13 +418,14 @@ class _RecommendationsViewState extends State<RecommendationsView> {
                   padding: const EdgeInsets.all(16),
                   children: [
                     _buildModeBanner(),
+                    if (onboardingCard != null) onboardingCard,
                     _sectionCard(title: 'Cómo se reparte tu gasto', child: _buildCuboBar()),
                     _sectionCard(title: 'Proyección de gasto para este ciclo', child: _buildProjection()),
                     _buildSafetyBaseIncome(),
-                    if (_buildEducationSuggestion() != null) _buildEducationSuggestion()!,
+                    if (educationSuggestion != null) educationSuggestion,
                     if (showHistoricalSections) ...[
                       _sectionCard(title: 'Análisis Pareto', child: _buildPareto()),
-                      _sectionCard(title: 'Tasa de Consumo Marginal', child: _buildTcm()),
+                      if (tcm != null) _sectionCard(title: 'Tasa de Consumo Marginal', child: _buildTcm(tcm)),
                       if (!_controller.hasEnoughHistory)
                         _buildHistoryLockedMessage()
                       else ...[

@@ -2,9 +2,7 @@ import 'dart:math' as math;
 import 'cycle_service.dart';
 import 'cycle_aggregate_service.dart';
 
-/// Resultado del WMA para una categoría: cuánto se gastó este ciclo,
-/// cuál era el promedio ponderado esperado, y si eso cuenta como
-/// anomalía.
+/// Resultado del WMA para una categoría.
 class CategoryWmaResult {
   final String category;
   final int currentSpend;
@@ -29,34 +27,24 @@ class CategoryCvResult {
 }
 
 /// Modelos estadísticos del Módulo 8 (WMA y CV). Ambos requieren al
-/// menos 3 ciclos históricos COMPLETOS (RQNF) y mantienen 4 decimales
-/// de precisión en los cálculos (RQNF).
+/// menos 3 ciclos completos (RQNF) y mantienen 4 decimales de precisión.
 class StatisticsService {
   final CycleService _cycleService = CycleService();
   final CycleAggregateService _aggregateService = CycleAggregateService();
 
   static const int requiredHistoricalCycles = 3;
 
-  /// Umbral de anomalía: si el gasto actual supera 1.5x el WMA, se
-  /// marca como anómalo. No viene un número exacto en el documento
-  /// para este umbral específico (a diferencia del 200% que sí usa
-  /// Notificaciones); 1.5x es una decisión de diseño razonable —
-  /// coméntala con tu asesor si prefieren otro valor.
+  /// RQNF: hay anomalía cuando el gasto del ciclo actual excede en más
+  /// de un 50% el valor de la WMA.
   static const double anomalyThresholdMultiplier = 1.5;
 
-  /// Umbral de "gasto impulsivo": CV mayor a 50% se considera alta
-  /// variabilidad. Es un valor estándar de referencia en estadística
-  /// (CV > 50% ya se considera dispersión alta), pero tampoco viene
-  /// fijado exactamente en el documento — mismo comentario que arriba.
-  static const double impulsiveCvThreshold = 50.0;
+  /// RQNF: hay patrón de gasto impulsivo cuando el CV es mayor al 40%.
+  static const double impulsiveCvThreshold = 40.0;
 
   double _round4(double value) => double.parse(value.toStringAsFixed(4));
 
-  /// Devuelve null si todavía no hay 3 ciclos históricos completos.
+  /// Devuelve null si todavía no hay 3 ciclos completos.
   Future<List<CategoryWmaResult>?> computeWmaAnomalies() async {
-    final hasEnough = await _cycleService.hasEnoughHistoricalCycles(requiredHistoricalCycles);
-    if (!hasEnough) return null;
-
     final currentCycle = await _cycleService.getCurrentCycle();
     final previousCycles = await _cycleService.getPreviousCycles(requiredHistoricalCycles);
     if (currentCycle == null || previousCycles.length < requiredHistoricalCycles) return null;
@@ -66,10 +54,9 @@ class StatisticsService {
     final cycle2Totals = await _aggregateService.categoryTotalsForCycle(previousCycles[1]);
     final cycle3Totals = await _aggregateService.categoryTotalsForCycle(previousCycles[2]); // más antiguo
 
-    // Pesos: el ciclo más reciente pesa más (RQF: "mayor peso a los
-    // períodos más recientes").
+    // Mayor peso a los ciclos más recientes.
     const weights = [3, 2, 1];
-    const weightSum = 6; // 3+2+1
+    const weightSum = 6;
 
     final categories = <String>{
       ...cycle1Totals.keys,
@@ -95,11 +82,8 @@ class StatisticsService {
     return results;
   }
 
-  /// Devuelve null si todavía no hay 3 ciclos históricos completos.
+  /// Devuelve null si todavía no hay 3 ciclos completos.
   Future<List<CategoryCvResult>?> computeCoefficientOfVariation() async {
-    final hasEnough = await _cycleService.hasEnoughHistoricalCycles(requiredHistoricalCycles);
-    if (!hasEnough) return null;
-
     final previousCycles = await _cycleService.getPreviousCycles(requiredHistoricalCycles);
     if (previousCycles.length < requiredHistoricalCycles) return null;
 
@@ -118,7 +102,7 @@ class StatisticsService {
       ];
 
       final mean = values.reduce((a, b) => a + b) / values.length;
-      if (mean == 0) continue; // sin historial de gasto real en esta categoría
+      if (mean == 0) continue;
 
       final variance = values.map((v) => (v - mean) * (v - mean)).reduce((a, b) => a + b) / values.length;
       final stdDev = math.sqrt(variance);

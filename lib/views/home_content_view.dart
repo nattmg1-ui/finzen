@@ -26,6 +26,22 @@ class _HomeContentViewState extends State<HomeContentView> {
     return '$capitalized, ${date.day} de $month';
   }
 
+  Widget _cycleStat({required IconData icon, required String label, required int amount}) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Icon(icon, size: 14, color: Colors.black54),
+            const SizedBox(width: 4),
+            Text(label, style: const TextStyle(fontSize: 12, color: Colors.black54)),
+          ],
+        ),
+        Text('\$$amount', style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.black87)),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
@@ -63,48 +79,27 @@ class _HomeContentViewState extends State<HomeContentView> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text('Disponible este mes', style: TextStyle(color: Colors.black54)),
+                    const Text('Saldo general', style: TextStyle(color: Colors.black54)),
                     const SizedBox(height: 4),
                     Text(
                       '\$${_controller.generalBalance} MXN',
                       style: const TextStyle(fontSize: 32, fontWeight: FontWeight.bold, color: Colors.black87),
                     ),
                     const SizedBox(height: 16),
+                    const Text('Este ciclo', style: TextStyle(fontSize: 12, color: Colors.black54, fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 6),
                     Row(
                       children: [
-                        Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Row(
-                              children: const [
-                                Icon(Icons.arrow_upward, size: 14, color: Colors.black54),
-                                SizedBox(width: 4),
-                                Text('Ingresos', style: TextStyle(fontSize: 12, color: Colors.black54)),
-                              ],
-                            ),
-                            Text('\$${_controller.totalIncome}', style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.black87)),
-                          ],
-                        ),
+                        _cycleStat(icon: Icons.arrow_upward, label: 'Ingresos', amount: _controller.cycleIncome),
                         const SizedBox(width: 32),
-                        Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Row(
-                              children: const [
-                                Icon(Icons.arrow_downward, size: 14, color: Colors.black54),
-                                SizedBox(width: 4),
-                                Text('Gastos', style: TextStyle(fontSize: 12, color: Colors.black54)),
-                              ],
-                            ),
-                            Text('\$${_controller.totalExpenses}', style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.black87)),
-                          ],
-                        ),
+                        _cycleStat(icon: Icons.arrow_downward, label: 'Gastos', amount: _controller.cycleExpenses),
                       ],
                     ),
                   ],
                 ),
               ),
               const SizedBox(height: 24),
+
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
