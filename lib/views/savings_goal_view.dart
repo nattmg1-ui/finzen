@@ -234,7 +234,8 @@ class _SavingsGoalViewState extends State<SavingsGoalView> {
   }
 
   void _startDeleteFlow(SavingsGoalModel goal) {
-    if (goal.currentAmount <= 0) {
+    // Una meta completada ya liberó su saldo al saldo general: solo se confirma.
+    if (goal.completed || goal.currentAmount <= 0) {
       _confirmDeleteDialog(goal, destinationGoalId: null);
       return;
     }
@@ -346,19 +347,14 @@ class _SavingsGoalViewState extends State<SavingsGoalView> {
                 return;
               }
 
+              // Al completarse, la meta libera su saldo al saldo general para que
+              // el usuario lo use; no se redirige a otra meta.
               if (result.justCompleted) {
-                final otherActiveGoals = _controller.activeGoalsExcept(goal.id);
-                if (otherActiveGoals.isEmpty) {
-                  _showInfoDialog('¡Meta completada! 🎉', 'Tu saldo se reintegró al saldo general.');
-                  return;
-                }
-                _showDestinationPicker(
-                  title: '¡Completaste "${goal.name}"! ¿A dónde va el saldo?',
-                  amountLabel: '\$${goal.currentAmount + (int.tryParse(amountController.text) ?? 0)} MXN acumulados',
-                  otherGoals: otherActiveGoals,
-                  onChosen: (destinationId) async {
-                    await _controller.redirectCompletedGoalFunds(goal, destinationGoalId: destinationId);
-                  },
+                final completedAmount = goal.currentAmount + (int.tryParse(amountController.text.trim()) ?? 0);
+                _showInfoDialog(
+                  '¡Meta completada!',
+                  'Ya juntaste \$$completedAmount para "${goal.name}". Ese dinero queda disponible en tu saldo '
+                      'general para que lo uses.',
                 );
               }
             },

@@ -91,6 +91,22 @@ class SavingsGoalService {
     });
   }
 
+  /// Pasa saldo de una meta a otra (al eliminar o completar una meta).
+  /// No crea un registro en goalContributions: ese dinero ya se había
+  /// ahorrado antes, así que no debe volver a contar en el Cubo C.
+  Future<void> transferFunds({
+    required String goalId,
+    required int currentAmount,
+    required int targetAmount,
+    required int amountToAdd,
+  }) {
+    final newAmount = currentAmount + amountToAdd;
+    return _goalsRef.doc(goalId).update({
+      'currentAmount': newAmount,
+      'completed': newAmount >= targetAmount,
+    });
+  }
+
   CollectionReference<Map<String, dynamic>> get contributionsRef => _contributionsRef;
 
   Future<void> deleteGoal(String goalId) {

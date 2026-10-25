@@ -12,11 +12,11 @@ class ReferenceIncome {
   ReferenceIncome({required this.amount, required this.source});
 }
 
-/// Ingreso de referencia del ciclo actual:
-/// - Freelance sin ingreso en el ciclo actual (Contingencia): usa el
-///   Ingreso Base de Seguridad; si todavía no hay 3 ciclos para
+/// Ingreso de referencia del ciclo actual, usado para la alerta de
+/// proyección de gasto (Módulo 8):
+/// - Modo de Contingencia (Freelance sin ingreso en el ciclo actual):
+///   usa el Ingreso Base de Seguridad; si todavía no hay 3 ciclos para
 ///   calcularlo, usa el ingreso mensual declarado en el diagnóstico.
-/// - Freelance o Mixto con IBS disponible: usa el IBS.
 /// - Cualquier otro caso: usa el ingreso registrado en el ciclo actual.
 class ReferenceIncomeService {
   final CycleService _cycleService = CycleService();
@@ -31,19 +31,15 @@ class ReferenceIncomeService {
 
     final profile = await _cycleService.effectiveProfile();
     final currentIncome = await _cycleService.incomeInCycle(currentCycle);
-    final safetyBase = await _safetyBaseIncomeService.computeSafetyBaseIncome();
 
     if (profile == 'Freelance' && currentIncome <= 0) {
+      final safetyBase = await _safetyBaseIncomeService.computeSafetyBaseIncome();
       if (safetyBase != null) {
         return ReferenceIncome(amount: safetyBase, source: ReferenceIncomeSource.safetyBase);
       }
       final user = await _firestoreService.fetchCurrentUserProfile();
       final declared = (user?.diagnosis?['monthlyIncome'] as num?)?.toInt() ?? 0;
       return ReferenceIncome(amount: declared, source: ReferenceIncomeSource.diagnosis);
-    }
-
-    if ((profile == 'Freelance' || profile == 'Mixto') && safetyBase != null) {
-      return ReferenceIncome(amount: safetyBase, source: ReferenceIncomeSource.safetyBase);
     }
 
     return ReferenceIncome(amount: currentIncome, source: ReferenceIncomeSource.cycle);

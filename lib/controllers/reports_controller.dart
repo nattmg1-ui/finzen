@@ -9,6 +9,8 @@ import '../services/income_service.dart';
 import '../services/firestore_service.dart';
 import '../services/savings_goal_service.dart';
 import '../services/reference_income_service.dart';
+import '../services/safety_base_income_service.dart';
+import '../services/financial_mode_service.dart';
 
 /// Gasto de un ciclo con su promedio móvil de 3 ciclos (reporte de Empleado).
 class CycleSpendingPoint {
@@ -19,16 +21,6 @@ class CycleSpendingPoint {
   CycleSpendingPoint({required this.label, required this.spent, this.movingAverage});
 }
 
-/// Ingresos de un ciclo separados por fuente (reporte de Mixto).
-class CycleIncomeBar {
-  final String label;
-  final Map<String, int> amountByType;
-
-  CycleIncomeBar({required this.label, required this.amountByType});
-
-  int get total => amountByType.values.fold(0, (sum, v) => sum + v);
-}
-
 /// Datos del Módulo 7 (Reportes), calculados sobre el ciclo actual.
 class ReportsController extends ChangeNotifier {
   final CycleService _cycleService = CycleService();
@@ -37,6 +29,8 @@ class ReportsController extends ChangeNotifier {
   final SavingsGoalService _goalService = SavingsGoalService();
   final FirestoreService _firestoreService = FirestoreService();
   final ReferenceIncomeService _referenceIncomeService = ReferenceIncomeService();
+  final SafetyBaseIncomeService _safetyBaseIncomeService = SafetyBaseIncomeService();
+  final FinancialModeService _financialModeService = FinancialModeService();
 
   /// RQNF: visualizaciones avanzadas con al menos 30 registros de gasto.
   static const int minRecordsForAdvanced = 30;
@@ -63,9 +57,12 @@ class ReportsController extends ChangeNotifier {
   Map<String, int> _cycleVitalCategoryTotals = {};
   List<CycleSpendingPoint> spendingHistory = [];
   double? averageSpentLastCycles;
-  List<CycleIncomeBar> incomeBySource = [];
+  /// Mixto: total registrado de cada tipo de fuente en el ciclo actual,
+  /// de mayor a menor.
+  List<MapEntry<String, int>> incomeBySourceCurrent = [];
   List<ExpenseModel> scatterExpenses = [];
   ReferenceIncome? referenceIncome;
+  bool _survivalMode = false;
 
   bool _incomesLoaded = false;
   bool _expensesLoaded = false;
@@ -134,8 +131,16 @@ class ReportsController extends ChangeNotifier {
   Future<void> _compute() async {
     profile = await _cycleService.effectiveProfile() ?? _profileFromDiagnosis();
     currentCycle = await _cycleService.getCurrentCycle();
+    // RQNF: el motor de recomendaciones determina el enfoque de supervivencia
+    // cada vez que cambian los ingresos o los gastos.
+    _survivalMode = (await _financialModeService.evaluate()).isSurvivalMode;
     final previous = await _cycleService.getPreviousCycles(historyCyclesShown); // más reciente primero
-    referenceIncome = await _referenceIncomeService.compute();
+    // Presupuesto de seguridad: usa el IBS si existe (referencia conservadora);
+    // si no, el ingreso de referencia del ciclo.
+    final safetyBaseIncome = await _safetyBaseIncomeService.computeSafetyBaseIncome();
+    referenceIncome = safetyBaseIncome != null
+        ? ReferenceIncome(amount: safetyBaseIncome, source: ReferenceIncomeSource.safetyBase)
+        : await _referenceIncomeService.compute();
 
     final cycle = currentCycle;
     if (cycle == null) {
@@ -145,7 +150,7 @@ class ReportsController extends ChangeNotifier {
       _cycleVitalCategoryTotals = {};
       spendingHistory = [];
       averageSpentLastCycles = null;
-      incomeBySource = [];
+      incomeBySourceCurrent = [];
       scatterExpenses = [];
       return;
     }
@@ -188,16 +193,11 @@ class ReportsController extends ChangeNotifier {
     averageSpentLastCycles =
         completed.isEmpty ? null : completed.map(_spentIn).reduce((a, b) => a + b) / completed.length;
 
-    incomeBySource = [
-      for (final c in chronological)
-        CycleIncomeBar(
-          label: label(c),
-          amountByType: {
-            for (final i in _incomes.where((i) => c.contains(i.date)))
-              i.type: (_incomes.where((x) => c.contains(x.date) && x.type == i.type).fold(0, (sum, x) => sum + x.amount)),
-          },
-        ),
-    ];
+    final byType = <String, int>{};
+    for (final i in _incomes.where((i) => cycle.contains(i.date))) {
+      byType[i.type] = (byType[i.type] ?? 0) + i.amount;
+    }
+    incomeBySourceCurrent = byType.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
 
     final historyStart = chronological.first.start;
     scatterExpenses = _expenses.where((e) => !e.date.isBefore(historyStart) && e.date.isBefore(cycle.end)).toList();
@@ -208,9 +208,9 @@ class ReportsController extends ChangeNotifier {
   bool get hasEnoughRecordsForAdvanced => _expenses.length >= minRecordsForAdvanced;
   int get totalExpenseRecords => _expenses.length;
 
-  /// RQNF: si los gastos del ciclo superan su ingreso, los reportes se
-  /// enfocan en liquidez y se ocultan los componentes de deseos e inversión.
-  bool get isLiquidityAtRisk => cycleSpent > 0 && cycleSpent > cycleIncome;
+  /// Enfoque de liquidez y supervivencia, determinado por el motor de
+  /// recomendaciones (Módulo 8).
+  bool get isLiquidityAtRisk => _survivalMode;
 
   Map<String, int> get categoryTotals => isLiquidityAtRisk ? _cycleVitalCategoryTotals : _cycleCategoryTotals;
 

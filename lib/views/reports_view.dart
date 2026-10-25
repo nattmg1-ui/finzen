@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:fl_chart/fl_chart.dart';
 import '../controllers/reports_controller.dart';
@@ -40,6 +41,33 @@ class _ReportsViewState extends State<ReportsView> {
       ),
     );
   }
+
+  /// Eje Y con valores redondos: escoge un intervalo "bonito" (1, 2 o 5 por
+  /// potencia de 10) y un tope múltiplo de ese intervalo, con espacio arriba.
+  ({double maxY, double interval}) _niceAxis(double maxValue) {
+    if (maxValue <= 0) return (maxY: 100, interval: 25);
+    final rough = maxValue / 4;
+    final magnitude = math.pow(10, (math.log(rough) / math.ln10).floor()).toDouble();
+    final step = [1, 2, 5, 10].map((m) => m * magnitude).firstWhere((s) => s >= rough);
+    final maxY = ((maxValue * 1.15) / step).ceil() * step;
+    return (maxY: maxY, interval: step);
+  }
+
+  /// Etiquetas del eje Y en miles ($5K, $10K...), solo en los múltiplos del intervalo.
+  AxisTitles _leftAxis(double interval) => AxisTitles(
+        sideTitles: SideTitles(
+          showTitles: true,
+          reservedSize: 44,
+          interval: interval,
+          getTitlesWidget: (value, meta) {
+            if (value % interval != 0) return const SizedBox.shrink();
+            final label = value >= 1000
+                ? '\$${(value / 1000).toStringAsFixed(value % 1000 == 0 ? 0 : 1)}K'
+                : '\$${value.toInt()}';
+            return Text(label, style: const TextStyle(fontSize: 11));
+          },
+        ),
+      );
 
   Widget _legend(List<MapEntry<String, Color>> items) {
     return Wrap(
@@ -181,30 +209,38 @@ class _ReportsViewState extends State<ReportsView> {
   Widget _buildIncomeVsExpenseBar() {
     final income = _controller.cycleIncome.toDouble();
     final expense = _controller.cycleSpent.toDouble();
-    final maxY = (income > expense ? income : expense) * 1.2 + 1;
+    final axis = _niceAxis(income > expense ? income : expense);
 
-    return SizedBox(
-      height: 200,
-      child: BarChart(
-        BarChartData(
-          maxY: maxY,
-          barGroups: [
-            BarChartGroupData(x: 0, barRods: [BarChartRodData(toY: income, color: Colors.green, width: 40, borderRadius: BorderRadius.circular(6))]),
-            BarChartGroupData(x: 1, barRods: [BarChartRodData(toY: expense, color: Colors.red, width: 40, borderRadius: BorderRadius.circular(6))]),
-          ],
-          titlesData: FlTitlesData(
-            leftTitles: const AxisTitles(sideTitles: SideTitles(showTitles: true, reservedSize: 44)),
-            topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-            rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-            bottomTitles: AxisTitles(
-              sideTitles: SideTitles(
-                showTitles: true,
-                getTitlesWidget: (value, meta) => Text(value == 0 ? 'Ingreso' : 'Gasto', style: const TextStyle(fontSize: 12)),
+    return Padding(
+      padding: const EdgeInsets.only(top: 12),
+      child: SizedBox(
+        height: 200,
+        child: BarChart(
+          BarChartData(
+            maxY: axis.maxY,
+            alignment: BarChartAlignment.spaceAround,
+            barGroups: [
+              BarChartGroupData(x: 0, barRods: [BarChartRodData(toY: income, color: Colors.green, width: 40, borderRadius: BorderRadius.circular(6))]),
+              BarChartGroupData(x: 1, barRods: [BarChartRodData(toY: expense, color: Colors.red, width: 40, borderRadius: BorderRadius.circular(6))]),
+            ],
+            titlesData: FlTitlesData(
+              leftTitles: _leftAxis(axis.interval),
+              topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+              rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+              bottomTitles: AxisTitles(
+                sideTitles: SideTitles(
+                  showTitles: true,
+                  reservedSize: 28,
+                  getTitlesWidget: (value, meta) => Padding(
+                    padding: const EdgeInsets.only(top: 6),
+                    child: Text(value == 0 ? 'Ingreso' : 'Gasto', style: const TextStyle(fontSize: 12)),
+                  ),
+                ),
               ),
             ),
+            gridData: FlGridData(show: true, drawVerticalLine: false, horizontalInterval: axis.interval),
+            borderData: FlBorderData(show: false),
           ),
-          gridData: const FlGridData(show: false),
-          borderData: FlBorderData(show: false),
         ),
       ),
     );
@@ -267,6 +303,11 @@ class _ReportsViewState extends State<ReportsView> {
       for (var i = 0; i < points.length; i++)
         if (points[i].movingAverage != null) FlSpot(i.toDouble(), points[i].movingAverage!),
     ];
+    final maxSpent = [
+      ...spentSpots.map((p) => p.y),
+      ...averageSpots.map((p) => p.y),
+    ].fold<double>(0, (a, b) => a > b ? a : b);
+    final axis = _niceAxis(maxSpent);
 
     return _sectionCard(
       title: 'Tu gasto: promedio vs actual',
@@ -281,6 +322,7 @@ class _ReportsViewState extends State<ReportsView> {
               child: LineChart(
                 LineChartData(
                   minY: 0,
+                  maxY: axis.maxY,
                   lineBarsData: [
                     LineChartBarData(
                       spots: spentSpots,
@@ -298,7 +340,7 @@ class _ReportsViewState extends State<ReportsView> {
                       ),
                   ],
                   titlesData: FlTitlesData(
-                    leftTitles: const AxisTitles(sideTitles: SideTitles(showTitles: true, reservedSize: 44)),
+                    leftTitles: _leftAxis(axis.interval),
                     topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
                     rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
                     bottomTitles: AxisTitles(
@@ -314,7 +356,7 @@ class _ReportsViewState extends State<ReportsView> {
                       ),
                     ),
                   ),
-                  gridData: const FlGridData(show: true, drawVerticalLine: false),
+                  gridData: FlGridData(show: true, drawVerticalLine: false, horizontalInterval: axis.interval),
                   borderData: FlBorderData(show: false),
                 ),
               ),
@@ -397,73 +439,69 @@ class _ReportsViewState extends State<ReportsView> {
     ];
   }
 
-  /// Mixto: barras apiladas, una por periodo, un segmento por fuente.
+  /// Mixto: una barra vertical simple por tipo de fuente, con el total
+  /// registrado de esa fuente en el ciclo actual.
   Widget _buildMixtoExtras() {
-    final bars = _controller.incomeBySource;
-    final types = <String>{for (final b in bars) ...b.amountByType.keys}.toList()..sort();
-    final typeColors = {for (var i = 0; i < types.length; i++) types[i]: _palette[i % _palette.length]};
-    final maxTotal = bars.isEmpty ? 0 : bars.map((b) => b.total).reduce((a, b) => a > b ? a : b);
+    final sources = _controller.incomeBySourceCurrent;
 
-    if (maxTotal == 0) {
+    if (sources.isEmpty) {
       return _sectionCard(
         title: 'Tus ingresos por fuente',
-        child: const Text('Aún no hay ingresos registrados por periodo.'),
+        child: const Text('Aún no tienes ingresos registrados en este ciclo.'),
       );
     }
 
+    final axis = _niceAxis(sources.first.value.toDouble());
+
     return _sectionCard(
       title: 'Tus ingresos por fuente',
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          SizedBox(
-            height: 220,
-            child: BarChart(
-              BarChartData(
-                maxY: maxTotal * 1.2,
-                barGroups: List.generate(bars.length, (i) {
-                  final bar = bars[i];
-                  double from = 0;
-                  final stack = <BarChartRodStackItem>[];
-                  for (final type in types) {
-                    final amount = (bar.amountByType[type] ?? 0).toDouble();
-                    if (amount <= 0) continue;
-                    stack.add(BarChartRodStackItem(from, from + amount, typeColors[type]!));
-                    from += amount;
-                  }
-                  return BarChartGroupData(x: i, barRods: [
+      child: Padding(
+        padding: const EdgeInsets.only(top: 12),
+        child: SizedBox(
+          height: 220,
+          child: BarChart(
+            BarChartData(
+              maxY: axis.maxY,
+              alignment: BarChartAlignment.spaceAround,
+              barGroups: [
+                for (var i = 0; i < sources.length; i++)
+                  BarChartGroupData(x: i, barRods: [
                     BarChartRodData(
-                      toY: bar.total.toDouble(),
-                      width: 22,
-                      color: Colors.transparent,
-                      rodStackItems: stack,
-                      borderRadius: BorderRadius.circular(4),
+                      toY: sources[i].value.toDouble(),
+                      color: _palette[i % _palette.length],
+                      width: 40,
+                      borderRadius: BorderRadius.circular(6),
                     ),
-                  ]);
-                }),
-                titlesData: FlTitlesData(
-                  leftTitles: const AxisTitles(sideTitles: SideTitles(showTitles: true, reservedSize: 44)),
-                  topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-                  rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-                  bottomTitles: AxisTitles(
-                    sideTitles: SideTitles(
-                      showTitles: true,
-                      getTitlesWidget: (value, meta) {
-                        final i = value.toInt();
-                        if (i < 0 || i >= bars.length) return const SizedBox.shrink();
-                        return Text(bars[i].label, style: const TextStyle(fontSize: 10));
-                      },
-                    ),
+                  ]),
+              ],
+              titlesData: FlTitlesData(
+                leftTitles: _leftAxis(axis.interval),
+                topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                bottomTitles: AxisTitles(
+                  sideTitles: SideTitles(
+                    showTitles: true,
+                    reservedSize: 40,
+                    getTitlesWidget: (value, meta) {
+                      final i = value.toInt();
+                      if (i < 0 || i >= sources.length) return const SizedBox.shrink();
+                      return Padding(
+                        padding: const EdgeInsets.only(top: 6),
+                        child: Text(
+                          '${sources[i].key}\n\$${sources[i].value}',
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(fontSize: 11),
+                        ),
+                      );
+                    },
                   ),
                 ),
-                gridData: const FlGridData(show: false),
-                borderData: FlBorderData(show: false),
               ),
+              gridData: FlGridData(show: true, drawVerticalLine: false, horizontalInterval: axis.interval),
+              borderData: FlBorderData(show: false),
             ),
           ),
-          const SizedBox(height: 8),
-          _legend([for (final t in types) MapEntry(t, typeColors[t]!)]),
-        ],
+        ),
       ),
     );
   }
@@ -504,7 +542,8 @@ class _ReportsViewState extends State<ReportsView> {
                         padding: const EdgeInsets.only(bottom: 12),
                         child: Text(_cycleRangeText(), style: const TextStyle(color: Colors.grey)),
                       ),
-                    if (atRisk)
+                    if (atRisk) ...[
+                      // RQF: aviso + únicamente las dos gráficas de supervivencia.
                       Container(
                         margin: const EdgeInsets.only(bottom: 16),
                         padding: const EdgeInsets.all(16),
@@ -523,15 +562,16 @@ class _ReportsViewState extends State<ReportsView> {
                           ],
                         ),
                       ),
-                    if (isMesada)
-                      _sectionCard(title: 'Tu ingreso gastado por categoría', child: _buildIncomeSharePie())
-                    else
-                      _sectionCard(
-                        title: atRisk ? 'Gasto Vital por categoría' : 'Gasto por categoría',
-                        child: _buildCategoryPie(),
-                      ),
-                    _sectionCard(title: 'Ingreso vs gasto', child: _buildIncomeVsExpenseBar()),
-                    ..._buildProfileSections(),
+                      _sectionCard(title: 'Gasto Vital por categoría', child: _buildCategoryPie()),
+                      _sectionCard(title: 'Ingreso vs Gasto', child: _buildIncomeVsExpenseBar()),
+                    ] else ...[
+                      if (isMesada)
+                        _sectionCard(title: 'Tu ingreso gastado por categoría', child: _buildIncomeSharePie())
+                      else
+                        _sectionCard(title: 'Gasto por categoría', child: _buildCategoryPie()),
+                      _sectionCard(title: 'Ingreso vs Gasto', child: _buildIncomeVsExpenseBar()),
+                      ..._buildProfileSections(),
+                    ],
                   ],
                 ),
         );

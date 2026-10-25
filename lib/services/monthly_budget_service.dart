@@ -2,22 +2,25 @@ import 'cycle_service.dart';
 import 'cycle_aggregate_service.dart';
 import 'income_service.dart';
 import 'firestore_service.dart';
-import 'reference_income_service.dart';
+import 'safety_base_income_service.dart';
 
-/// Montos mensuales que usa el Módulo 5 (Metas de ahorro):
-/// - Ingreso mensual: ingreso de referencia del ciclo actual convertido
-///   a mensual (semanal x4.33, quincenal x2, mensual x1). Si la
-///   referencia es el Ingreso Base de Seguridad o el diagnóstico, ya es
-///   un monto mensual y se usa tal cual.
-/// - Gastos básicos mensuales: promedio del Cubo A (Vital) de los
-///   últimos 3 ciclos completos, convertido a mensual. Si todavía no hay
-///   ciclos completos, se usa lo declarado en el diagnóstico.
+/// Montos que usa el Módulo 5 (Metas de ahorro), expresados por mes.
+/// La regla del 20% da el mismo resultado por mes que por ciclo, porque
+/// cuota e ingreso se convierten con el mismo factor.
+/// - Ingreso: el registrado en el ciclo actual convertido a mensual
+///   (semanal x4.33, quincenal x2, mensual o mes calendario x1). Para
+///   perfiles Freelance o Mixto (RQNF del Módulo 5): Ingreso Base de
+///   Seguridad si está disponible; si no, el ingreso del ciclo; y si
+///   tampoco hay ingreso en el ciclo, lo declarado en el diagnóstico.
+/// - Gastos básicos: promedio del Cubo A (Vital) de los últimos 3 ciclos
+///   completos, convertido a mensual. Si todavía no hay ciclos completos,
+///   se usa lo declarado en el diagnóstico.
 class MonthlyBudgetService {
   final CycleService _cycleService = CycleService();
   final CycleAggregateService _aggregateService = CycleAggregateService();
   final IncomeService _incomeService = IncomeService();
   final FirestoreService _firestoreService = FirestoreService();
-  final ReferenceIncomeService _referenceIncomeService = ReferenceIncomeService();
+  final SafetyBaseIncomeService _safetyBaseIncomeService = SafetyBaseIncomeService();
 
   static const int basicExpensesCycles = 3;
 
@@ -39,10 +42,26 @@ class MonthlyBudgetService {
   }
 
   Future<int> monthlyIncome() async {
-    final reference = await _referenceIncomeService.compute();
-    if (reference.source != ReferenceIncomeSource.cycle) return reference.amount;
+    final profile = await _cycleService.effectiveProfile();
+    final isVariable = profile == 'Freelance' || profile == 'Mixto';
+
+    // RQNF: Freelance o Mixto con IBS disponible usan el IBS.
+    if (isVariable) {
+      final safetyBase = await _safetyBaseIncomeService.computeSafetyBaseIncome();
+      if (safetyBase != null) return safetyBase;
+    }
+
+    final currentCycle = await _cycleService.getCurrentCycle();
+    final cycleIncome = currentCycle == null ? 0 : await _cycleService.incomeInCycle(currentCycle);
+
+    // RQNF: Freelance o Mixto sin IBS ni ingreso en el ciclo usan el diagnóstico.
+    if (isVariable && cycleIncome <= 0) {
+      final user = await _firestoreService.fetchCurrentUserProfile();
+      return (user?.diagnosis?['monthlyIncome'] as num?)?.toInt() ?? 0;
+    }
+
     final factor = await cyclesPerMonth();
-    return (reference.amount * factor).round();
+    return (cycleIncome * factor).round();
   }
 
   Future<int> monthlyBasicExpenses() async {

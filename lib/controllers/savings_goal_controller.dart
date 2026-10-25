@@ -130,8 +130,10 @@ class SavingsGoalController extends ChangeNotifier {
     }
   }
 
+  /// Metas a las que se puede redirigir saldo: activas (ni completadas ni
+  /// pausadas) y distintas de la meta de origen.
   List<SavingsGoalModel> activeGoalsExcept(String excludeId) {
-    return goals.where((g) => !g.completed && g.id != excludeId).toList();
+    return goals.where((g) => !g.completed && !g.paused && g.id != excludeId).toList();
   }
 
   DateTime maxAllowedDeadline() {
@@ -359,6 +361,15 @@ class SavingsGoalController extends ChangeNotifier {
       notifyListeners();
       return (success: false, justCompleted: false);
     }
+
+    // RQNF: el aporte no puede superar lo que falta para completar la meta.
+    final remaining = goal.targetAmount - goal.currentAmount;
+    if (amount > remaining) {
+      errorMessage = 'Solo te faltan \$$remaining para completar esta meta. '
+          'Ingresa un monto igual o menor.';
+      notifyListeners();
+      return (success: false, justCompleted: false);
+    }
     final willComplete = !goal.completed && (goal.currentAmount + amount) >= goal.targetAmount;
     try {
       await _service.addFunds(
@@ -375,29 +386,11 @@ class SavingsGoalController extends ChangeNotifier {
     }
   }
 
-  Future<bool> redirectCompletedGoalFunds(SavingsGoalModel goal, {String? destinationGoalId}) async {
-    if (destinationGoalId == null) return true;
-    try {
-      final destination = goals.firstWhere((g) => g.id == destinationGoalId);
-      await _service.addFunds(
-        goalId: destination.id,
-        currentAmount: destination.currentAmount,
-        targetAmount: destination.targetAmount,
-        amountToAdd: goal.currentAmount,
-      );
-      return true;
-    } catch (_) {
-      errorMessage = 'No se pudo redirigir el saldo.';
-      notifyListeners();
-      return false;
-    }
-  }
-
   Future<bool> deleteGoal(SavingsGoalModel goal, {String? destinationGoalId}) async {
     try {
-      if (destinationGoalId != null && goal.currentAmount > 0) {
+      if (destinationGoalId != null && !goal.completed && goal.currentAmount > 0) {
         final destination = goals.firstWhere((g) => g.id == destinationGoalId);
-        await _service.addFunds(
+        await _service.transferFunds(
           goalId: destination.id,
           currentAmount: destination.currentAmount,
           targetAmount: destination.targetAmount,

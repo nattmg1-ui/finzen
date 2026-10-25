@@ -175,9 +175,9 @@ class _RecommendationsViewState extends State<RecommendationsView> {
           spacing: 16,
           runSpacing: 8,
           children: [
-            _legendDot('Vital', '${(vitalPct * 100).round()}%', const Color(0xFF1B6B4E)),
-            _legendDot('Opcional', '${(opcionalPct * 100).round()}%', const Color(0xFFE0562D)),
-            _legendDot('Futuro', '${(futuroPct * 100).round()}%', const Color(0xFF5B4FE0)),
+            _legendDot('Vital', '\$${aggregate.cuboA} · ${(vitalPct * 100).round()}%', const Color(0xFF1B6B4E)),
+            _legendDot('Opcional', '\$${aggregate.cuboB} · ${(opcionalPct * 100).round()}%', const Color(0xFFE0562D)),
+            _legendDot('Futuro', '\$${aggregate.cuboC} · ${(futuroPct * 100).round()}%', const Color(0xFF5B4FE0)),
           ],
         ),
       ],
@@ -298,20 +298,22 @@ class _RecommendationsViewState extends State<RecommendationsView> {
 
   Widget _buildTcm(TcmResult tcm) {
     final percent = (tcm.tcm * 100).toStringAsFixed(1);
+    final base = 'Tu ingreso subió \$${tcm.incomeDelta} respecto al ciclo anterior, y destinaste el $percent% de ese '
+        'aumento a gasto opcional';
 
-    if (tcm.exceedsThreshold) {
-      return Text(
-        'Tu ingreso subió \$${tcm.incomeDelta} respecto al ciclo anterior, y destinaste el $percent% de ese '
-        'aumento a gasto opcional en vez de ahorrarlo. Considera aportar esa diferencia a una meta de ahorro.',
-        style: const TextStyle(fontSize: 13),
-      );
+    if (!tcm.exceedsThreshold) {
+      return Text('$base. Vas por buen camino.', style: const TextStyle(fontSize: 13));
     }
 
-    return Text(
-      'Tu ingreso subió \$${tcm.incomeDelta} respecto al ciclo anterior, y destinaste el $percent% de ese '
-      'aumento a gasto opcional. Vas por buen camino.',
-      style: const TextStyle(fontSize: 13),
-    );
+    // RQF: sugerir aportar la diferencia entre el aumento de ingreso y el
+    // aumento de gasto opcional.
+    final difference = tcm.incomeDelta - tcm.discretionaryDelta;
+    final suggestion = difference > 0
+        ? ' en vez de ahorrarlo. Considera aportar \$$difference MXN, la parte de tu aumento que no se fue '
+            'a gasto opcional, a una de tus metas de ahorro.'
+        : '. Gastaste en deseos más de lo que aumentó tu ingreso; revisa ese gasto antes de que afecte tus metas.';
+
+    return Text('$base$suggestion', style: const TextStyle(fontSize: 13));
   }
 
   Widget _buildHistoryLockedMessage() {
